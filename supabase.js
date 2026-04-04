@@ -1,0 +1,99 @@
+(function () {
+  const cfg = window.AttendanceConfig || {};
+  const url = (cfg.supabaseUrl || "").trim();
+  const key = (cfg.supabaseAnonKey || "").trim();
+
+  let client = null;
+  if (url && key && key !== "REPLACE_WITH_YOUR_SUPABASE_ANON_KEY" && window.supabase?.createClient) {
+    client = window.supabase.createClient(url, key);
+  }
+
+  function isConfigured() {
+    return !!client;
+  }
+
+  async function loadAll() {
+    if (!client) return null;
+    const [staffRes, attendanceRes, advanceRes] = await Promise.all([
+      client.from("staff").select("*").order("created_at", { ascending: true }),
+      client.from("attendance").select("*").order("date", { ascending: false }),
+      client.from("advances").select("*").order("date", { ascending: false }),
+    ]);
+
+    if (staffRes.error) throw staffRes.error;
+    if (attendanceRes.error) throw attendanceRes.error;
+    if (advanceRes.error) throw advanceRes.error;
+
+    return {
+      staff: (staffRes.data || []).map((row) => ({
+        id: row.id,
+        name: row.name || "",
+        hindiName: row.hindi_name || "",
+        isActive: row.is_active !== false,
+        salaryPerDay: Number(row.salary_per_day) || 0,
+      })),
+      attendance: (attendanceRes.data || []).map((row) => ({
+        id: row.id,
+        staffId: row.staff_id,
+        date: row.date,
+        status: row.status,
+        hours: Number(row.hours) || 0,
+        extraHours: Number(row.extra_hours) || 0,
+      })),
+      advances: (advanceRes.data || []).map((row) => ({
+        id: row.id,
+        staffId: row.staff_id,
+        date: row.date,
+        type: row.type,
+        amount: Number(row.amount) || 0,
+        note: row.note || "",
+      })),
+    };
+  }
+
+  async function saveStaff(person) {
+    if (!client) return;
+    const { error } = await client.from("staff").upsert({
+      id: person.id,
+      name: person.name,
+      hindi_name: person.hindiName || "",
+      is_active: person.isActive !== false,
+      salary_per_day: person.salaryPerDay,
+    }, { onConflict: "id" });
+    if (error) throw error;
+  }
+
+  async function upsertAttendance(record) {
+    if (!client) return;
+    const { error } = await client.from("attendance").upsert({
+      id: record.id,
+      staff_id: record.staffId,
+      date: record.date,
+      status: record.status,
+      hours: record.hours,
+      extra_hours: Number(record.extraHours) || 0,
+    }, { onConflict: "id" });
+    if (error) throw error;
+  }
+
+  async function upsertAdvance(entry) {
+    if (!client) return;
+    const { error } = await client.from("advances").upsert({
+      id: entry.id,
+      staff_id: entry.staffId,
+      date: entry.date,
+      type: entry.type,
+      amount: Number(entry.amount) || 0,
+      note: entry.note || "",
+    }, { onConflict: "id" });
+    if (error) throw error;
+  }
+
+  window.AttendanceCloud = {
+    isConfigured,
+    loadAll,
+    saveStaff,
+    upsertAttendance,
+    upsertAdvance,
+  };
+})();

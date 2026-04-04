@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Attendance & Salary Manager</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="background-blur"></div>
+  <main class="container">
+    <header class="app-header card">
+      <h1>Attendance & Salary Manager</h1>
+      <p>Track team attendance in one go and calculate latest weekly/monthly salary quickly.</p>
+      <div id="db-status" class="db-status fallback">Fallback Mode (IndexedDB)</div>
+      <div class="nav-actions">
+        <button type="button" id="go-dashboard">Dashboard</button>
+        <button type="button" id="go-mark-attendance">Mark Attendance</button>
+      </div>
+    </header>
+
+    <section id="home-page" class="page">
+      <section class="card">
+        <h2>Quick Actions</h2>
+        <div class="nav-actions">
+          <button type="button" id="open-add-staff-page">Add Staff</button>
+          <button type="button" id="open-mark-attendance-page">Mark Attendance</button>
+          <button type="button" id="open-weekly-salary-page">Weekly Salary</button>
+          <button type="button" id="open-staff-salary-page">Staff Salary</button>
+          <button type="button" id="open-advance-page">Advance Management</button>
+          <button type="button" id="open-attendance-records-page">Attendance Records</button>
+        </div>
+      </section>
+    </section>
+
+    <section id="add-staff-page" class="page hidden">
+      <section class="card">
+        <h2>Add Staff</h2>
+        <form id="staff-form" class="grid-form">
+          <label>
+            Staff Name
+            <input type="text" id="staff-name" placeholder="Enter full name" required>
+          </label>
+          <label>
+            Staff Name (Hindi - optional)
+            <input type="text" id="staff-name-hindi" placeholder="e.g. इंदरपाल">
+          </label>
+          <label>
+            Salary Per Day
+            <input type="number" id="salary-per-day" min="0" step="0.01" placeholder="e.g. 800" required>
+          </label>
+          <button type="submit">Add Staff</button>
+        </form>
+      </section>
+    </section>
+
+    <section id="weekly-salary-page" class="page hidden">
+      <section class="card">
+        <h2>Weekly Salary</h2>
+        <form id="salary-form" class="grid-form">
+          <label>
+            Start Date
+            <input type="date" id="salary-start-date">
+          </label>
+          <label>
+            End Date
+            <input type="date" id="salary-end-date">
+          </label>
+          <button type="submit">Refresh Salary</button>
+          <button type="button" id="apply-salary-deductions">Apply Deductions</button>
+          <button type="button" id="download-weekly-pdf">Download Weekly PDF</button>
+        </form>
+        <div id="salary-result" class="result hidden"></div>
+      </section>
+    </section>
+
+    <section id="advance-page" class="page hidden">
+      <section class="card">
+        <h2>Advance Management</h2>
+        <form id="advance-form" class="grid-form">
+          <label>
+            Staff
+            <select id="advance-staff" required></select>
+          </label>
+          <label>
+            Date
+            <input type="date" id="advance-date" required>
+          </label>
+          <label>
+            Type
+            <select id="advance-type" required>
+              <option value="taken">Advance Taken</option>
+              <option value="settle">Settle / Deduct</option>
+            </select>
+          </label>
+          <label>
+            Amount
+            <input type="number" id="advance-amount" min="0" step="0.01" required>
+          </label>
+          <label>
+            Notes
+            <input type="text" id="advance-note" placeholder="Optional note">
+          </label>
+          <button type="submit">Save Entry</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Current Advance Balance</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Staff</th>
+                <th>Outstanding Advance</th>
+              </tr>
+            </thead>
+            <tbody id="advance-balance-body">
+              <tr><td colspan="2" class="empty">No records.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Advance History</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Staff</th>
+                <th>Type</th>
+                <th>Amount</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="advance-history-body">
+              <tr><td colspan="5" class="empty">No advance transactions yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="staff-salary-page" class="page hidden">
+      <section class="card">
+        <h2>Staff List (Edit Salary)</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Salary / Day</th>
+                <th>Salary / Hour (8h/day)</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="staff-table-body">
+              <tr>
+                <td colspan="4" class="empty">No staff added yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="attendance-records-page" class="page hidden">
+      <section class="card">
+        <h2>Attendance Records</h2>
+        <form id="attendance-filter-form" class="grid-form">
+          <label>
+            View
+            <select id="attendance-view-mode">
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </label>
+          <label>
+            Reference Date
+            <input type="date" id="attendance-ref-date">
+          </label>
+          <button type="submit">Apply</button>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Staff</th>
+                <th>Status</th>
+                <th>Hours</th>
+              </tr>
+            </thead>
+            <tbody id="attendance-table-body">
+              <tr>
+                <td colspan="4" class="empty">No attendance records yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="attendance-page" class="page hidden">
+      <section class="card">
+        <h2>Mark Attendance</h2>
+        <form id="bulk-attendance-form">
+          <div class="bulk-top-bar">
+            <label>
+              Attendance Date
+              <input type="date" id="bulk-attendance-date" required>
+            </label>
+            <button type="submit">Save All Attendance</button>
+          </div>
+          <p class="hint">Partial means custom base hours. Add extra time separately. Present base is 8 hours, Absent base is 0.</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Staff</th>
+                  <th>Salary / Day</th>
+                  <th>Update Salary</th>
+                  <th>Employee</th>
+                  <th>Status</th>
+                  <th>Hours (if Partial)</th>
+                  <th>Extra Hours</th>
+                </tr>
+              </thead>
+              <tbody id="bulk-attendance-body">
+                <tr>
+                  <td colspan="7" class="empty">No active staff available. Add or enable staff.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Disabled Employees</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Staff</th>
+                <th>Salary / Day</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="disabled-staff-body">
+              <tr>
+                <td colspan="3" class="empty">No disabled staff.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="config.js"></script>
+  <script src="supabase.js"></script>
+  <script src="script.js?v=20260404-3"></script>
+</body>
+</html>
