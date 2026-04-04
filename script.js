@@ -1018,6 +1018,7 @@ staffForm.addEventListener("submit", async (event) => {
   renderStaff();
   renderBulkAttendanceRows();
   renderAdvanceStaffOptions();
+  renderAttendanceUpdateStaffOptions();
   renderAdvanceBalance();
   renderSalaryOverview();
   staffForm.reset();
