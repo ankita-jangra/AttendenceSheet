@@ -16,19 +16,133 @@
       <div class="nav-actions">
         <button type="button" id="go-dashboard">Dashboard</button>
         <button type="button" id="go-mark-attendance">Mark Attendance</button>
+        <button type="button" id="logout-btn">Logout</button>
       </div>
     </header>
 
-    <section id="home-page" class="page">
+    <section id="login-page" class="page">
+      <section class="card">
+        <h2>Login</h2>
+        <form id="login-form" class="grid-form">
+          <label>
+            Username
+            <input type="text" id="login-username" required>
+          </label>
+          <label>
+            Password
+            <input type="password" id="login-password" required>
+          </label>
+          <button type="submit">Login</button>
+        </form>
+        <p id="login-message" class="hint"></p>
+      </section>
+    </section>
+
+    <section id="home-page" class="page hidden">
       <section class="card">
         <h2>Quick Actions</h2>
         <div class="nav-actions">
           <button type="button" id="open-add-staff-page">Add Staff</button>
           <button type="button" id="open-mark-attendance-page">Mark Attendance</button>
           <button type="button" id="open-weekly-salary-page">Weekly Salary</button>
+          <button type="button" id="open-weekly-paid-page">Weekly Paid Summary</button>
           <button type="button" id="open-staff-salary-page">Staff Salary</button>
           <button type="button" id="open-advance-page">Advance Management</button>
+          <button type="button" id="open-user-management-page">User Management</button>
           <button type="button" id="open-attendance-records-page">Attendance Records</button>
+        </div>
+      </section>
+    </section>
+
+    <section id="weekly-paid-page" class="page hidden">
+      <section class="card">
+        <h2>Weekly Paid Summary</h2>
+        <form id="weekly-paid-form" class="grid-form">
+          <label>
+            Start Date
+            <input type="date" id="weekly-paid-start-date">
+          </label>
+          <label>
+            End Date
+            <input type="date" id="weekly-paid-end-date">
+          </label>
+          <button type="submit">Fetch Paid Summary</button>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead id="weekly-paid-head"></thead>
+            <tbody id="weekly-paid-body">
+              <tr><td colspan="6" class="empty">No data.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card hidden" id="weekly-paid-editor">
+        <h2 id="weekly-paid-editor-title">Edit Attendance</h2>
+        <form id="weekly-paid-editor-form">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Status</th>
+                  <th>Hours (Partial)</th>
+                  <th>Extra Hours</th>
+                </tr>
+              </thead>
+              <tbody id="weekly-paid-editor-body">
+                <tr><td colspan="4" class="empty">Select staff to edit.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="bulk-top-bar">
+            <button type="submit">Save Attendance Changes</button>
+            <button type="button" id="weekly-paid-editor-cancel">Cancel</button>
+          </div>
+        </form>
+      </section>
+    </section>
+
+    <section id="user-management-page" class="page hidden">
+      <section class="card">
+        <h2>User Management (Admin Only)</h2>
+        <form id="create-user-form" class="grid-form">
+          <label>
+            Username
+            <input type="text" id="new-user-username" required>
+          </label>
+          <label>
+            Password
+            <input type="password" id="new-user-password" required>
+          </label>
+          <label>
+            Role
+            <select id="new-user-role">
+              <option value="user">User</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <button type="submit">Create User</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Users</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="users-table-body">
+              <tr><td colspan="4" class="empty">No users.</td></tr>
+            </tbody>
+          </table>
         </div>
       </section>
     </section>
@@ -182,24 +296,50 @@
             <input type="date" id="attendance-ref-date">
           </label>
           <button type="submit">Apply</button>
+          <button type="button" id="open-attendance-update">Update Attendance</button>
         </form>
         <div class="table-wrap">
           <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Staff</th>
-                <th>Status</th>
-                <th>Hours</th>
-              </tr>
-            </thead>
+            <thead id="attendance-table-head"></thead>
             <tbody id="attendance-table-body">
               <tr>
-                <td colspan="4" class="empty">No attendance records yet.</td>
+                <td colspan="3" class="empty">No attendance records yet.</td>
               </tr>
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section class="card hidden" id="attendance-update-card">
+        <h2>Update Attendance Entry</h2>
+        <form id="attendance-update-form" class="grid-form">
+          <label>
+            Date
+            <input type="date" id="attendance-update-date" required>
+          </label>
+          <label>
+            Staff
+            <select id="attendance-update-staff" required></select>
+          </label>
+          <label>
+            Status
+            <select id="attendance-update-status" required>
+              <option value="Present">Present</option>
+              <option value="Absent">Absent</option>
+              <option value="Partial">Partial</option>
+            </select>
+          </label>
+          <label>
+            Partial Hours
+            <input type="number" id="attendance-update-partial-hours" min="0" max="8" step="0.5" value="4" disabled>
+          </label>
+          <label>
+            Extra Hours
+            <input type="number" id="attendance-update-extra-hours" min="0" max="16" step="0.5" value="0">
+          </label>
+          <button type="submit">Save Update</button>
+          <button type="button" id="attendance-update-cancel">Cancel</button>
+        </form>
       </section>
     </section>
 
@@ -222,10 +362,10 @@
                   <th>Staff</th>
                   <th>Salary / Day</th>
                   <th>Update Salary</th>
-                  <th>Employee</th>
                   <th>Status</th>
                   <th>Hours (if Partial)</th>
                   <th>Extra Hours</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody id="bulk-attendance-body">
@@ -266,6 +406,6 @@
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="config.js"></script>
   <script src="supabase.js"></script>
-  <script src="script.js?v=20260404-3"></script>
+  <script src="script.js?v=20260404-5"></script>
 </body>
 </html>

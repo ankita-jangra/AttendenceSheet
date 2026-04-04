@@ -4,6 +4,8 @@ const DB_VERSION = 1;
 const STAFF_STORE = "staff";
 const ATTENDANCE_STORE = "attendance";
 const ADVANCE_STORE = "advances";
+const USERS_STORE = "users";
+const AUTH_USER_KEY = "attendance_auth_user";
 const WORKING_HOURS_PER_DAY = 8;
 
 const staffForm = document.getElementById("staff-form");
@@ -32,9 +34,42 @@ const advanceAmountInput = document.getElementById("advance-amount");
 const advanceNoteInput = document.getElementById("advance-note");
 const advanceBalanceBody = document.getElementById("advance-balance-body");
 const advanceHistoryBody = document.getElementById("advance-history-body");
+const weeklyPaidForm = document.getElementById("weekly-paid-form");
+const weeklyPaidStartDateInput = document.getElementById("weekly-paid-start-date");
+const weeklyPaidEndDateInput = document.getElementById("weekly-paid-end-date");
+const weeklyPaidHead = document.getElementById("weekly-paid-head");
+const weeklyPaidBody = document.getElementById("weekly-paid-body");
+const weeklyPaidEditor = document.getElementById("weekly-paid-editor");
+const weeklyPaidEditorTitle = document.getElementById("weekly-paid-editor-title");
+const weeklyPaidEditorForm = document.getElementById("weekly-paid-editor-form");
+const weeklyPaidEditorBody = document.getElementById("weekly-paid-editor-body");
+const weeklyPaidEditorCancelBtn = document.getElementById("weekly-paid-editor-cancel");
 const attendanceFilterForm = document.getElementById("attendance-filter-form");
 const attendanceViewMode = document.getElementById("attendance-view-mode");
 const attendanceRefDate = document.getElementById("attendance-ref-date");
+const attendanceTableHead = document.getElementById("attendance-table-head");
+const openAttendanceUpdateBtn = document.getElementById("open-attendance-update");
+const attendanceUpdateCard = document.getElementById("attendance-update-card");
+const attendanceUpdateForm = document.getElementById("attendance-update-form");
+const attendanceUpdateDate = document.getElementById("attendance-update-date");
+const attendanceUpdateStaff = document.getElementById("attendance-update-staff");
+const attendanceUpdateStatus = document.getElementById("attendance-update-status");
+const attendanceUpdatePartialHours = document.getElementById("attendance-update-partial-hours");
+const attendanceUpdateExtraHours = document.getElementById("attendance-update-extra-hours");
+const attendanceUpdateCancelBtn = document.getElementById("attendance-update-cancel");
+const loginPage = document.getElementById("login-page");
+const loginForm = document.getElementById("login-form");
+const loginUsernameInput = document.getElementById("login-username");
+const loginPasswordInput = document.getElementById("login-password");
+const loginMessage = document.getElementById("login-message");
+const logoutBtn = document.getElementById("logout-btn");
+const userManagementPage = document.getElementById("user-management-page");
+const openUserManagementPageBtn = document.getElementById("open-user-management-page");
+const createUserForm = document.getElementById("create-user-form");
+const newUserUsernameInput = document.getElementById("new-user-username");
+const newUserPasswordInput = document.getElementById("new-user-password");
+const newUserRoleSelect = document.getElementById("new-user-role");
+const usersTableBody = document.getElementById("users-table-body");
 
 const dbStatus = document.getElementById("db-status");
 const goDashboardBtn = document.getElementById("go-dashboard");
@@ -42,6 +77,7 @@ const goMarkAttendanceBtn = document.getElementById("go-mark-attendance");
 const homePage = document.getElementById("home-page");
 const addStaffPage = document.getElementById("add-staff-page");
 const weeklySalaryPage = document.getElementById("weekly-salary-page");
+const weeklyPaidPage = document.getElementById("weekly-paid-page");
 const staffSalaryPage = document.getElementById("staff-salary-page");
 const advancePage = document.getElementById("advance-page");
 const attendanceRecordsPage = document.getElementById("attendance-records-page");
@@ -49,14 +85,18 @@ const attendancePage = document.getElementById("attendance-page");
 const openAddStaffPageBtn = document.getElementById("open-add-staff-page");
 const openMarkAttendancePageBtn = document.getElementById("open-mark-attendance-page");
 const openWeeklySalaryPageBtn = document.getElementById("open-weekly-salary-page");
+const openWeeklyPaidPageBtn = document.getElementById("open-weekly-paid-page");
 const openStaffSalaryPageBtn = document.getElementById("open-staff-salary-page");
 const openAdvancePageBtn = document.getElementById("open-advance-page");
 const openAttendanceRecordsPageBtn = document.getElementById("open-attendance-records-page");
 
-let state = { staff: [], attendance: [], advances: [] };
+let state = { staff: [], attendance: [], advances: [], users: [] };
 let currentSalaryRows = [];
+let currentWeeklySummaryRange = null;
+let currentWeeklyEditStaffId = null;
 let useCloudDb = false;
 let dbRef = null;
+let currentUser = null;
 const hindiNameCache = {};
 let hindiFontLoaded = false;
 
@@ -112,6 +152,10 @@ function openDatabase() {
         a.createIndex("staffId", "staffId", { unique: false });
         a.createIndex("date", "date", { unique: false });
       }
+      if (!db.objectStoreNames.contains(USERS_STORE)) {
+        const u = db.createObjectStore(USERS_STORE, { keyPath: "id" });
+        u.createIndex("username", "username", { unique: true });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -137,10 +181,11 @@ function putOne(db, storeName, value) {
 }
 
 async function loadState(db) {
-  const [staff, attendance, advances] = await Promise.all([readAll(db, STAFF_STORE), readAll(db, ATTENDANCE_STORE), readAll(db, ADVANCE_STORE)]);
+  const [staff, attendance, advances, users] = await Promise.all([readAll(db, STAFF_STORE), readAll(db, ATTENDANCE_STORE), readAll(db, ADVANCE_STORE), readAll(db, USERS_STORE)]);
   state.staff = Array.isArray(staff) ? staff : [];
   state.attendance = Array.isArray(attendance) ? attendance : [];
   state.advances = Array.isArray(advances) ? advances : [];
+  state.users = Array.isArray(users) ? users : [];
 }
 
 async function migrateFromLocalStorage(db) {
@@ -171,8 +216,15 @@ function formatCurrency(value) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(value);
 }
 
+function toLocalIsoDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function todayString() {
-  return new Date().toISOString().split("T")[0];
+  return toLocalIsoDate(new Date());
 }
 
 function getStaffById(staffId) {
@@ -215,7 +267,7 @@ function getDateRangeFromLatest(latestDate, period) {
   if (period === "monthly") {
     const start = new Date(base.getFullYear(), base.getMonth(), 1);
     const end = new Date(base.getFullYear(), base.getMonth() + 1, 0);
-    return [start.toISOString().split("T")[0], end.toISOString().split("T")[0]];
+    return [toLocalIsoDate(start), toLocalIsoDate(end)];
   }
   const day = base.getDay(); // Sunday=0 ... Saturday=6
   const diffToSunday = -day;
@@ -223,7 +275,7 @@ function getDateRangeFromLatest(latestDate, period) {
   start.setDate(base.getDate() + diffToSunday);
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
-  return [start.toISOString().split("T")[0], end.toISOString().split("T")[0]];
+  return [toLocalIsoDate(start), toLocalIsoDate(end)];
 }
 
 function formatDateLabel(dateStr) {
@@ -256,7 +308,7 @@ function getWeekDays(startDate, endDate) {
   const end = new Date(`${endDate}T00:00:00`);
   const cursor = new Date(start);
   while (cursor <= end) {
-    const iso = cursor.toISOString().split("T")[0];
+    const iso = toLocalIsoDate(cursor);
     days.push({
       iso,
       name: cursor.toLocaleDateString("en-US", { weekday: "short" }),
@@ -314,6 +366,27 @@ function resolveSalaryRange() {
   };
 }
 
+function getDateRangeList(startDate, endDate) {
+  const out = [];
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    out.push(toLocalIsoDate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
+}
+
+function getDailySalaryValue(staff, dateIso) {
+  const row = state.attendance.find((entry) => entry.staffId === staff.id && entry.date === dateIso);
+  if (!row) return 0;
+  const hourly = Number(staff.salaryPerDay) / WORKING_HOURS_PER_DAY;
+  if (row.status === "Present") return Number(staff.salaryPerDay);
+  if (row.status === "Partial") return (Number(row.hours) || 0) * hourly;
+  return 0;
+}
+
 function renderSalaryOverview() {
   const { periodLabel, startDate, endDate } = resolveSalaryRange();
   const activeStaff = getActiveStaff();
@@ -353,6 +426,21 @@ function renderSalaryOverview() {
     `;
   }).join("");
 
+  const dateList = getDateRangeList(startDate, endDate);
+  const dateHead = dateList.map((d) => `<th>${d}</th>`).join("");
+  const dateRows = currentSalaryRows.map((row) => {
+    const { person } = row;
+    const perDayValues = dateList.map((d) => getDailySalaryValue(person, d));
+    const total = perDayValues.reduce((sum, val) => sum + val, 0);
+    return `
+      <tr>
+        <td>${person.name}</td>
+        ${perDayValues.map((v) => `<td>${formatCurrency(v)}</td>`).join("")}
+        <td><strong>${formatCurrency(total)}</strong></td>
+      </tr>
+    `;
+  }).join("");
+
   salaryResult.classList.remove("hidden");
   salaryResult.innerHTML = `
     <p><strong>${periodLabel}:</strong> ${startDate} to ${endDate}</p>
@@ -376,6 +464,19 @@ function renderSalaryOverview() {
           </tr>
         </thead>
         <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <h3>Date-wise Salary Table</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Staff</th>
+            ${dateHead}
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody>${dateRows}</tbody>
       </table>
     </div>
   `;
@@ -526,36 +627,52 @@ function getWeeklyRangeByDate(dateStr) {
   start.setDate(base.getDate() - day);
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
-  return [start.toISOString().split("T")[0], end.toISOString().split("T")[0]];
+  return [toLocalIsoDate(start), toLocalIsoDate(end)];
 }
 
 function getMonthlyRangeByDate(dateStr) {
   const base = new Date(`${dateStr}T00:00:00`);
   const start = new Date(base.getFullYear(), base.getMonth(), 1);
   const end = new Date(base.getFullYear(), base.getMonth() + 1, 0);
-  return [start.toISOString().split("T")[0], end.toISOString().split("T")[0]];
+  return [toLocalIsoDate(start), toLocalIsoDate(end)];
 }
 
 function renderAttendanceHistory() {
   const ref = attendanceRefDate.value || todayString();
   const mode = attendanceViewMode.value || "weekly";
   const [startDate, endDate] = mode === "monthly" ? getMonthlyRangeByDate(ref) : getWeeklyRangeByDate(ref);
-  const filtered = state.attendance.filter((entry) => entry.date >= startDate && entry.date <= endDate);
+  const days = getDateRangeList(startDate, endDate);
+  const staffForRange = state.staff.filter((person) => {
+    if (person.isActive !== false) return true;
+    return state.attendance.some((entry) => entry.staffId === person.id && entry.date >= startDate && entry.date <= endDate);
+  });
 
-  if (!filtered.length) {
-    attendanceTableBody.innerHTML = '<tr><td colspan="4" class="empty">No attendance records yet.</td></tr>';
+  attendanceTableHead.innerHTML = `
+    <tr>
+      <th>Staff</th>
+      ${days.map((d) => `<th>${formatDateLabel(d)}</th>`).join("")}
+    </tr>
+  `;
+
+  if (!staffForRange.length) {
+    attendanceTableBody.innerHTML = `<tr><td colspan="${1 + days.length}" class="empty">No attendance records yet.</td></tr>`;
     return;
   }
-  const sorted = [...filtered].sort((a, b) => b.date.localeCompare(a.date));
-  attendanceTableBody.innerHTML = sorted.map((entry) => {
-    const staff = getStaffById(entry.staffId);
-    const name = staff ? staff.name : "Unknown";
+
+  attendanceTableBody.innerHTML = staffForRange.map((person) => {
+    const cells = days.map((date) => {
+      const row = state.attendance.find((entry) => entry.staffId === person.id && entry.date === date);
+      if (!row || row.status === "Absent") return "<td>X</td>";
+      if (row.status === "Present") return "<td>P</td>";
+      const extra = Number(row.extraHours || 0);
+      const partialHours = Math.max(0, (Number(row.hours) || 0) - extra);
+      const marker = partialHours === 4 ? "P/2" : `P/${partialHours}`;
+      return `<td>${marker}</td>`;
+    }).join("");
     return `
       <tr>
-        <td>${entry.date}</td>
-        <td>${name}</td>
-        <td><span class="badge ${entry.status.toLowerCase()}">${entry.status}</span></td>
-        <td>${entry.hours}</td>
+        <td>${person.name}</td>
+        ${cells}
       </tr>
     `;
   }).join("");
@@ -572,12 +689,13 @@ function renderBulkAttendanceRows() {
       <td>${person.name}</td>
       <td>${formatCurrency(person.salaryPerDay)}</td>
       <td>
-        <input type="number" class="compact-input js-bulk-salary-input" data-staff-id="${person.id}" min="0" step="0.01" value="${person.salaryPerDay}">
-        <button type="button" class="js-update-salary-bulk" data-staff-id="${person.id}">Update</button>
+        <button type="button" class="js-open-salary-editor-bulk" data-staff-id="${person.id}">Update</button>
+        <div class="js-bulk-salary-editor hidden" data-editor-for="${person.id}">
+          <input type="number" class="compact-input js-bulk-salary-input" data-staff-id="${person.id}" min="0" step="0.01" value="${person.salaryPerDay}">
+          <button type="button" class="js-save-salary-bulk" data-staff-id="${person.id}">Save</button>
+          <button type="button" class="js-cancel-salary-bulk" data-staff-id="${person.id}">Cancel</button>
+        </div>
         <span class="update-msg hidden" data-msg-for-bulk="${person.id}">Updated</span>
-      </td>
-      <td>
-        <button type="button" class="js-disable-staff" data-staff-id="${person.id}">Disable</button>
       </td>
       <td>
         <div class="status-group">
@@ -591,6 +709,9 @@ function renderBulkAttendanceRows() {
       </td>
       <td>
         <input type="number" class="compact-input js-extra-hours" data-staff-id="${person.id}" min="0" max="16" step="0.5" value="0">
+      </td>
+      <td>
+        <button type="button" class="js-disable-staff" data-staff-id="${person.id}">Disable</button>
       </td>
     </tr>
   `).join("");
@@ -616,6 +737,28 @@ function renderAdvanceStaffOptions() {
   if (!advanceStaffSelect) return;
   const options = state.staff.map((person) => `<option value="${person.id}">${person.name}</option>`).join("");
   advanceStaffSelect.innerHTML = options || "";
+}
+
+function renderAttendanceUpdateStaffOptions() {
+  if (!attendanceUpdateStaff) return;
+  const options = state.staff.map((person) => `<option value="${person.id}">${person.name}</option>`).join("");
+  attendanceUpdateStaff.innerHTML = options || "";
+}
+
+function loadAttendanceUpdateFormFromExisting() {
+  const staffId = attendanceUpdateStaff.value;
+  const date = attendanceUpdateDate.value;
+  if (!staffId || !date) return;
+  const existing = state.attendance.find((entry) => entry.staffId === staffId && entry.date === date);
+  const status = existing?.status || "Present";
+  const extraHours = Number(existing?.extraHours || 0);
+  const partialHours = status === "Partial"
+    ? Math.max(0, Math.min(WORKING_HOURS_PER_DAY, Number(existing?.hours || 0) - extraHours))
+    : 4;
+  attendanceUpdateStatus.value = status;
+  attendanceUpdatePartialHours.disabled = status !== "Partial";
+  attendanceUpdatePartialHours.value = partialHours;
+  attendanceUpdateExtraHours.value = extraHours;
 }
 
 function renderAdvanceBalance() {
@@ -652,6 +795,115 @@ function renderAdvanceHistory() {
   }).join("");
 }
 
+function renderWeeklyPaidSummary() {
+  const startDate = weeklyPaidStartDateInput.value;
+  const endDate = weeklyPaidEndDateInput.value;
+  currentWeeklySummaryRange = { startDate, endDate };
+  if (!startDate || !endDate || startDate > endDate) {
+    weeklyPaidHead.innerHTML = "";
+    weeklyPaidBody.innerHTML = '<tr><td colspan="6" class="empty">Please select valid dates.</td></tr>';
+    return;
+  }
+  const dateList = getDateRangeList(startDate, endDate);
+  const staffForRange = state.staff.filter((person) => {
+    if (person.isActive !== false) return true;
+    return state.attendance.some((a) => a.staffId === person.id && a.date >= startDate && a.date <= endDate);
+  });
+  if (!staffForRange.length) {
+    weeklyPaidHead.innerHTML = "";
+    weeklyPaidBody.innerHTML = '<tr><td colspan="6" class="empty">No data for selected range.</td></tr>';
+    return;
+  }
+
+  weeklyPaidHead.innerHTML = `
+    <tr>
+      <th>Sr</th>
+      <th>Name</th>
+      <th>Daily Wage</th>
+      ${dateList.map((d) => `<th>${formatDateLabel(d)}</th>`).join("")}
+      <th>Total Days</th>
+      <th>Amount</th>
+      <th>Save</th>
+    </tr>
+  `;
+
+  let totalPaid = 0;
+  const rows = staffForRange.map((person, idx) => {
+    const s = calculateSalaryForStaff(person, startDate, endDate);
+    totalPaid += s.payable;
+    const totalDays = (s.totalHours / WORKING_HOURS_PER_DAY).toFixed(2).replace(/\.00$/, "");
+    const dayCells = dateList.map((date) => {
+      const entry = state.attendance.find((a) => a.staffId === person.id && a.date === date);
+      const status = entry?.status || "Absent";
+      const extraHours = Number(entry?.extraHours || 0);
+      const partialHours = status === "Partial"
+        ? Math.max(0, Math.min(WORKING_HOURS_PER_DAY, Number(entry?.hours || 0) - extraHours))
+        : 4;
+      return `
+        <td data-date="${date}">
+          <select class="js-weekly-cell-status compact-input">
+            <option value="Present" ${status === "Present" ? "selected" : ""}>P</option>
+            <option value="Partial" ${status === "Partial" ? "selected" : ""}>P/2</option>
+            <option value="Absent" ${status === "Absent" ? "selected" : ""}>X</option>
+          </select>
+          <input type="number" class="compact-input js-weekly-cell-partial" min="0" max="8" step="0.5" value="${partialHours}" ${status === "Partial" ? "" : "disabled"} title="Partial hours">
+          <input type="number" class="compact-input js-weekly-cell-extra" min="0" max="16" step="0.5" value="${extraHours}" title="Extra hours">
+        </td>
+      `;
+    }).join("");
+    return `
+      <tr data-weekly-staff-row="${person.id}">
+        <td>${idx + 1}</td>
+        <td>${person.name}</td>
+        <td>${formatCurrency(person.salaryPerDay)}</td>
+        ${dayCells}
+        <td>${totalDays}</td>
+        <td>${formatCurrency(s.payable)}</td>
+        <td><button type="button" class="js-save-weekly-row" data-staff-id="${person.id}">Save</button></td>
+      </tr>
+    `;
+  }).join("");
+
+  weeklyPaidBody.innerHTML = `
+    ${rows}
+    <tr>
+      <td colspan="${3 + dateList.length + 1}"><strong>Total</strong></td>
+      <td><strong>${formatCurrency(totalPaid)}</strong></td>
+      <td></td>
+    </tr>
+  `;
+}
+
+function renderWeeklyEditTable(staffId) {
+  if (!currentWeeklySummaryRange?.startDate || !currentWeeklySummaryRange?.endDate) return;
+  const staff = getStaffById(staffId);
+  if (!staff) return;
+  currentWeeklyEditStaffId = staffId;
+  weeklyPaidEditor.classList.remove("hidden");
+  weeklyPaidEditorTitle.textContent = `Edit Attendance - ${staff.name}`;
+  const days = getDateRangeList(currentWeeklySummaryRange.startDate, currentWeeklySummaryRange.endDate);
+  weeklyPaidEditorBody.innerHTML = days.map((date) => {
+    const existing = state.attendance.find((a) => a.staffId === staffId && a.date === date);
+    const status = existing?.status || "Absent";
+    const partialHours = status === "Partial" ? Math.min(WORKING_HOURS_PER_DAY, Number(existing?.hours || 0) - Number(existing?.extraHours || 0)) : 4;
+    const extraHours = Number(existing?.extraHours || 0);
+    return `
+      <tr data-edit-date="${date}">
+        <td>${date}</td>
+        <td>
+          <select class="js-edit-status">
+            <option value="Present" ${status === "Present" ? "selected" : ""}>Present</option>
+            <option value="Absent" ${status === "Absent" ? "selected" : ""}>Absent</option>
+            <option value="Partial" ${status === "Partial" ? "selected" : ""}>Partial</option>
+          </select>
+        </td>
+        <td><input type="number" class="compact-input js-edit-partial" min="0" max="8" step="0.5" value="${partialHours}" ${status === "Partial" ? "" : "disabled"}></td>
+        <td><input type="number" class="compact-input js-edit-extra" min="0" max="16" step="0.5" value="${extraHours}"></td>
+      </tr>
+    `;
+  }).join("");
+}
+
 function updateStatusOptionStyles(row) {
   if (!row) return;
   row.querySelectorAll(".status-option").forEach((opt) => opt.classList.remove("is-selected"));
@@ -663,15 +915,22 @@ function updateStatusOptionStyles(row) {
 }
 
 function setPage(pageName) {
-  const pages = [homePage, addStaffPage, weeklySalaryPage, staffSalaryPage, advancePage, attendanceRecordsPage, attendancePage];
+  if (!currentUser) {
+    setAuthUI();
+    return;
+  }
+  const pages = [homePage, addStaffPage, weeklySalaryPage, weeklyPaidPage, staffSalaryPage, advancePage, attendanceRecordsPage, attendancePage];
+  if (isAdminUser()) pages.push(userManagementPage);
   pages.forEach((p) => p.classList.add("hidden"));
   if (pageName === "home") homePage.classList.remove("hidden");
   if (pageName === "add-staff") addStaffPage.classList.remove("hidden");
   if (pageName === "weekly-salary") weeklySalaryPage.classList.remove("hidden");
+  if (pageName === "weekly-paid") weeklyPaidPage.classList.remove("hidden");
   if (pageName === "staff-salary") staffSalaryPage.classList.remove("hidden");
   if (pageName === "advance") advancePage.classList.remove("hidden");
   if (pageName === "attendance-records") attendanceRecordsPage.classList.remove("hidden");
   if (pageName === "mark-attendance") attendancePage.classList.remove("hidden");
+  if (pageName === "user-management" && isAdminUser()) userManagementPage.classList.remove("hidden");
 }
 
 function flashUpdatedMessage(selector) {
@@ -691,9 +950,57 @@ async function saveAttendanceRecord(record) {
   else await putOne(dbRef, ATTENDANCE_STORE, record);
 }
 
+function upsertAttendanceInState(record) {
+  const idx = state.attendance.findIndex((entry) =>
+    entry.staffId === record.staffId && entry.date === record.date
+  );
+  if (idx >= 0) {
+    state.attendance[idx] = { ...state.attendance[idx], ...record };
+  } else {
+    state.attendance.push(record);
+  }
+}
+
 async function saveAdvanceRecord(entry) {
   if (useCloudDb) await window.AttendanceCloud.upsertAdvance(entry);
   else await putOne(dbRef, ADVANCE_STORE, entry);
+}
+
+async function saveUserRecord(user) {
+  if (useCloudDb) await window.AttendanceCloud.upsertUser(user);
+  else await putOne(dbRef, USERS_STORE, user);
+}
+
+function isAdminUser() {
+  return currentUser?.role === "admin";
+}
+
+function setAuthUI() {
+  const loggedIn = !!currentUser;
+  loginPage.classList.toggle("hidden", loggedIn);
+  if (!loggedIn) {
+    const pages = [homePage, addStaffPage, weeklySalaryPage, staffSalaryPage, advancePage, attendanceRecordsPage, attendancePage, userManagementPage];
+    pages.forEach((p) => p.classList.add("hidden"));
+  }
+  if (openUserManagementPageBtn) {
+    openUserManagementPageBtn.classList.toggle("hidden", !isAdminUser());
+  }
+}
+
+function renderUsersTable() {
+  if (!usersTableBody) return;
+  if (!state.users.length) {
+    usersTableBody.innerHTML = '<tr><td colspan="4" class="empty">No users.</td></tr>';
+    return;
+  }
+  usersTableBody.innerHTML = state.users.map((u) => `
+    <tr>
+      <td>${u.username}</td>
+      <td>${u.role}</td>
+      <td>${u.isActive !== false ? "Active" : "Disabled"}</td>
+      <td>${u.username === "admin" ? "-" : `<button type="button" class="js-toggle-user" data-user-id="${u.id}">${u.isActive !== false ? "Disable" : "Enable"}</button>`}</td>
+    </tr>
+  `).join("");
 }
 
 staffForm.addEventListener("submit", async (event) => {
@@ -745,8 +1052,20 @@ bulkAttendanceBody.addEventListener("change", (event) => {
 });
 
 bulkAttendanceBody.addEventListener("click", async (event) => {
-  const btn = event.target.closest(".js-update-salary-bulk");
+  const btn = event.target.closest(".js-save-salary-bulk");
+  const openBtn = event.target.closest(".js-open-salary-editor-bulk");
+  const cancelBtn = event.target.closest(".js-cancel-salary-bulk");
   const disableBtn = event.target.closest(".js-disable-staff");
+  if (openBtn) {
+    const editor = bulkAttendanceBody.querySelector(`.js-bulk-salary-editor[data-editor-for="${openBtn.dataset.staffId}"]`);
+    if (editor) editor.classList.remove("hidden");
+    return;
+  }
+  if (cancelBtn) {
+    const editor = bulkAttendanceBody.querySelector(`.js-bulk-salary-editor[data-editor-for="${cancelBtn.dataset.staffId}"]`);
+    if (editor) editor.classList.add("hidden");
+    return;
+  }
   if (disableBtn) {
     const staffId = disableBtn.dataset.staffId;
     const person = getStaffById(staffId);
@@ -815,9 +1134,7 @@ bulkAttendanceForm.addEventListener("submit", async (event) => {
     const hours = baseHours + extraHours;
     const record = { id: `${person.id}_${date}`, staffId: person.id, date, status, hours, extraHours };
     tasks.push(saveAttendanceRecord(record));
-    const existingIndex = state.attendance.findIndex((entry) => entry.id === record.id);
-    if (existingIndex >= 0) state.attendance[existingIndex] = record;
-    else state.attendance.push(record);
+    upsertAttendanceInState(record);
   }
   await Promise.all(tasks);
   renderAttendanceHistory();
@@ -872,12 +1189,134 @@ goDashboardBtn.addEventListener("click", () => setPage("home"));
 openAddStaffPageBtn.addEventListener("click", () => setPage("add-staff"));
 openMarkAttendancePageBtn.addEventListener("click", () => setPage("mark-attendance"));
 openWeeklySalaryPageBtn.addEventListener("click", () => setPage("weekly-salary"));
+openWeeklyPaidPageBtn.addEventListener("click", () => setPage("weekly-paid"));
 openStaffSalaryPageBtn.addEventListener("click", () => setPage("staff-salary"));
 openAdvancePageBtn.addEventListener("click", () => setPage("advance"));
+openUserManagementPageBtn.addEventListener("click", () => setPage("user-management"));
 openAttendanceRecordsPageBtn.addEventListener("click", () => setPage("attendance-records"));
 attendanceFilterForm.addEventListener("submit", (event) => {
   event.preventDefault();
   renderAttendanceHistory();
+});
+openAttendanceUpdateBtn.addEventListener("click", () => {
+  attendanceUpdateCard.classList.remove("hidden");
+  attendanceUpdateDate.value = todayString();
+  renderAttendanceUpdateStaffOptions();
+  loadAttendanceUpdateFormFromExisting();
+});
+attendanceUpdateCancelBtn.addEventListener("click", () => {
+  attendanceUpdateCard.classList.add("hidden");
+});
+attendanceUpdateStatus.addEventListener("change", () => {
+  attendanceUpdatePartialHours.disabled = attendanceUpdateStatus.value !== "Partial";
+});
+attendanceUpdateDate.addEventListener("change", loadAttendanceUpdateFormFromExisting);
+attendanceUpdateStaff.addEventListener("change", loadAttendanceUpdateFormFromExisting);
+attendanceUpdateForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const staffId = attendanceUpdateStaff.value;
+  const date = attendanceUpdateDate.value;
+  if (!staffId || !date) return;
+  let partial = Number(attendanceUpdatePartialHours.value || 0);
+  let extra = Number(attendanceUpdateExtraHours.value || 0);
+  partial = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, partial));
+  extra = Math.max(0, Math.min(16, extra));
+  const status = attendanceUpdateStatus.value;
+  const base = status === "Present" ? WORKING_HOURS_PER_DAY : status === "Absent" ? 0 : partial;
+  const record = {
+    id: `${staffId}_${date}`,
+    staffId,
+    date,
+    status,
+    hours: base + extra,
+    extraHours: extra,
+  };
+  await saveAttendanceRecord(record);
+  upsertAttendanceInState(record);
+  attendanceRefDate.value = date;
+  renderAttendanceHistory();
+  renderSalaryOverview();
+  renderWeeklyPaidSummary();
+});
+weeklyPaidForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  renderWeeklyPaidSummary();
+});
+weeklyPaidBody.addEventListener("click", (event) => {
+  const saveBtn = event.target.closest(".js-save-weekly-row");
+  if (!saveBtn || !currentWeeklySummaryRange?.startDate || !currentWeeklySummaryRange?.endDate) return;
+  const row = saveBtn.closest("tr[data-weekly-staff-row]");
+  if (!row) return;
+  const staffId = saveBtn.dataset.staffId;
+  const cells = row.querySelectorAll("td[data-date]");
+  const tasks = [];
+  cells.forEach((cell) => {
+    const date = cell.dataset.date;
+    const status = cell.querySelector(".js-weekly-cell-status").value;
+    let partial = Number(cell.querySelector(".js-weekly-cell-partial").value || 0);
+    let extra = Number(cell.querySelector(".js-weekly-cell-extra").value || 0);
+    partial = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, partial));
+    extra = Math.max(0, Math.min(16, extra));
+    const base = status === "Present" ? WORKING_HOURS_PER_DAY : status === "Absent" ? 0 : partial;
+    const record = {
+      id: `${staffId}_${date}`,
+      staffId,
+      date,
+      status,
+      hours: base + extra,
+      extraHours: extra,
+    };
+    tasks.push(saveAttendanceRecord(record));
+    upsertAttendanceInState(record);
+  });
+  Promise.all(tasks).then(() => {
+    renderAttendanceHistory();
+    renderSalaryOverview();
+    renderWeeklyPaidSummary();
+  });
+});
+weeklyPaidBody.addEventListener("change", (event) => {
+  const select = event.target.closest(".js-weekly-cell-status");
+  if (!select) return;
+  const cell = select.closest("td[data-date]");
+  if (!cell) return;
+  const partialInput = cell.querySelector(".js-weekly-cell-partial");
+  partialInput.disabled = select.value !== "Partial";
+});
+weeklyPaidEditorCancelBtn.addEventListener("click", () => {
+  currentWeeklyEditStaffId = null;
+  weeklyPaidEditor.classList.add("hidden");
+});
+weeklyPaidEditorForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!currentWeeklyEditStaffId) return;
+  const rows = weeklyPaidEditorBody.querySelectorAll("tr[data-edit-date]");
+  const tasks = [];
+  rows.forEach((row) => {
+    const date = row.dataset.editDate;
+    const status = row.querySelector(".js-edit-status").value;
+    let partial = Number(row.querySelector(".js-edit-partial").value || 0);
+    let extra = Number(row.querySelector(".js-edit-extra").value || 0);
+    partial = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, partial));
+    extra = Math.max(0, Math.min(16, extra));
+    const base = status === "Present" ? WORKING_HOURS_PER_DAY : status === "Absent" ? 0 : partial;
+    const record = {
+      id: `${currentWeeklyEditStaffId}_${date}`,
+      staffId: currentWeeklyEditStaffId,
+      date,
+      status,
+      hours: base + extra,
+      extraHours: extra,
+    };
+    tasks.push(saveAttendanceRecord(record));
+    upsertAttendanceInState(record);
+  });
+  await Promise.all(tasks);
+  renderAttendanceHistory();
+  renderSalaryOverview();
+  renderWeeklyPaidSummary();
+  weeklyPaidEditor.classList.add("hidden");
+  currentWeeklyEditStaffId = null;
 });
 
 advanceForm.addEventListener("submit", async (event) => {
@@ -905,6 +1344,53 @@ advanceForm.addEventListener("submit", async (event) => {
   advanceDateInput.value = todayString();
 });
 
+loginForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const username = loginUsernameInput.value.trim();
+  const password = loginPasswordInput.value;
+  const user = state.users.find((u) => u.username === username && u.password === password && u.isActive !== false);
+  if (!user) {
+    loginMessage.textContent = "Invalid username or password.";
+    return;
+  }
+  currentUser = { ...user };
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify({ id: user.id }));
+  loginMessage.textContent = "";
+  setAuthUI();
+  setPage("home");
+});
+
+logoutBtn.addEventListener("click", () => {
+  currentUser = null;
+  localStorage.removeItem(AUTH_USER_KEY);
+  setAuthUI();
+});
+
+createUserForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!isAdminUser()) return;
+  const username = newUserUsernameInput.value.trim();
+  const password = newUserPasswordInput.value;
+  const role = newUserRoleSelect.value;
+  if (!username || !password) return;
+  if (state.users.some((u) => u.username.toLowerCase() === username.toLowerCase())) return;
+  const user = { id: `u_${Date.now()}`, username, password, role, isActive: true };
+  await saveUserRecord(user);
+  state.users.push(user);
+  renderUsersTable();
+  createUserForm.reset();
+});
+
+usersTableBody.addEventListener("click", async (event) => {
+  const btn = event.target.closest(".js-toggle-user");
+  if (!btn || !isAdminUser()) return;
+  const user = state.users.find((u) => u.id === btn.dataset.userId);
+  if (!user) return;
+  user.isActive = !(user.isActive !== false);
+  await saveUserRecord(user);
+  renderUsersTable();
+});
+
 async function init() {
   useCloudDb = !!window.AttendanceCloud?.isConfigured?.();
   renderDbStatus();
@@ -913,10 +1399,25 @@ async function init() {
     state.staff = Array.isArray(cloudData?.staff) ? cloudData.staff : [];
     state.attendance = Array.isArray(cloudData?.attendance) ? cloudData.attendance : [];
     state.advances = Array.isArray(cloudData?.advances) ? cloudData.advances : [];
+    state.users = Array.isArray(cloudData?.users) ? cloudData.users : [];
   } else {
     dbRef = await openDatabase();
     await loadState(dbRef);
     await migrateFromLocalStorage(dbRef);
+  }
+  if (!state.users.some((u) => u.username === "admin")) {
+    const adminUser = { id: "admin", username: "admin", password: "ankita00", role: "admin", isActive: true };
+    await saveUserRecord(adminUser);
+    state.users.push(adminUser);
+  }
+  const authRaw = localStorage.getItem(AUTH_USER_KEY);
+  if (authRaw) {
+    try {
+      const parsed = JSON.parse(authRaw);
+      currentUser = state.users.find((u) => u.id === parsed.id && u.isActive !== false) || null;
+    } catch (_err) {
+      currentUser = null;
+    }
   }
   bulkAttendanceDate.value = todayString();
   attendanceRefDate.value = todayString();
@@ -924,16 +1425,22 @@ async function init() {
   const [weekStart, weekEnd] = getDateRangeFromLatest(getLatestAttendanceDate(), "weekly");
   salaryStartDateInput.value = weekStart;
   salaryEndDateInput.value = weekEnd;
+  weeklyPaidStartDateInput.value = weekStart;
+  weeklyPaidEndDateInput.value = weekEnd;
   advanceDateInput.value = todayString();
   renderStaff();
   renderBulkAttendanceRows();
   renderDisabledStaffRows();
   renderAdvanceStaffOptions();
+  renderAttendanceUpdateStaffOptions();
   renderAdvanceBalance();
   renderAdvanceHistory();
+  renderUsersTable();
   renderAttendanceHistory();
   renderSalaryOverview();
-  setPage("home");
+  renderWeeklyPaidSummary();
+  setAuthUI();
+  if (currentUser) setPage("home");
 }
 
 init();

@@ -14,15 +14,17 @@
 
   async function loadAll() {
     if (!client) return null;
-    const [staffRes, attendanceRes, advanceRes] = await Promise.all([
+    const [staffRes, attendanceRes, advanceRes, usersRes] = await Promise.all([
       client.from("staff").select("*").order("created_at", { ascending: true }),
       client.from("attendance").select("*").order("date", { ascending: false }),
       client.from("advances").select("*").order("date", { ascending: false }),
+      client.from("app_users").select("*").order("created_at", { ascending: true }),
     ]);
 
     if (staffRes.error) throw staffRes.error;
     if (attendanceRes.error) throw attendanceRes.error;
     if (advanceRes.error) throw advanceRes.error;
+    if (usersRes.error) throw usersRes.error;
 
     return {
       staff: (staffRes.data || []).map((row) => ({
@@ -47,6 +49,13 @@
         type: row.type,
         amount: Number(row.amount) || 0,
         note: row.note || "",
+      })),
+      users: (usersRes.data || []).map((row) => ({
+        id: row.id,
+        username: row.username,
+        password: row.password,
+        role: row.role || "user",
+        isActive: row.is_active !== false,
       })),
     };
   }
@@ -89,11 +98,24 @@
     if (error) throw error;
   }
 
+  async function upsertUser(user) {
+    if (!client) return;
+    const { error } = await client.from("app_users").upsert({
+      id: user.id,
+      username: user.username,
+      password: user.password,
+      role: user.role || "user",
+      is_active: user.isActive !== false,
+    }, { onConflict: "id" });
+    if (error) throw error;
+  }
+
   window.AttendanceCloud = {
     isConfigured,
     loadAll,
     saveStaff,
     upsertAttendance,
     upsertAdvance,
+    upsertUser,
   };
 })();
