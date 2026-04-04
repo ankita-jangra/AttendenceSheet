@@ -1,4 +1,5 @@
 attendance-week-*.pdf
 *.pdf
 ~$*.xlsx
+*copy.xlsx
 *.tmp
