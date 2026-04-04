@@ -1,0 +1,4 @@
+attendance-week-*.pdf
+*.pdf
+~$*.xlsx
+*.tmp
