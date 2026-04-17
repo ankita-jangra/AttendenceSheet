@@ -11,7 +11,7 @@
       }
     } catch (_e) {}
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260417-5">
+  <link rel="stylesheet" href="styles.css?v=20260417-8">
 </head>
 <body>
   <div class="background-blur"></div>
@@ -22,6 +22,7 @@
       <div id="db-status" class="db-status fallback">Fallback Mode (IndexedDB)</div>
       <div class="nav-actions">
         <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch color theme">Light theme</button>
+        <button type="button" id="open-info-page">Info</button>
         <button type="button" id="go-dashboard">Dashboard</button>
         <button type="button" id="go-mark-attendance">Mark Attendance</button>
         <button type="button" id="logout-btn">Logout</button>
@@ -60,8 +61,42 @@
           <button type="button" id="open-staff-salary-page" data-requires-full-access>Staff Salary</button>
           <button type="button" id="open-advance-page" data-requires-full-access>Advance Management</button>
           <button type="button" id="open-user-management-page">User Management</button>
-          <button type="button" id="open-attendance-records-page" data-requires-full-access>Attendance Records</button>
+          <button type="button" id="open-attendance-records-page">Attendance Records</button>
+          <button type="button" id="open-info-from-home">App info</button>
         </div>
+      </section>
+    </section>
+
+    <section id="info-page" class="page hidden">
+      <section class="card info-prose">
+        <h2>About this app</h2>
+        <p>
+          <strong>Attendance &amp; Salary Manager</strong> helps you run day-to-day workforce tracking in one place:
+          register staff, record attendance (including partial days and extra hours), and calculate pay for a chosen week or month.
+          Data can sync to the cloud when configured, with offline-friendly storage as a backup.
+        </p>
+
+        <h3>What you can do</h3>
+        <ul>
+          <li><strong>Staff</strong> — Add team members, assign departments, and set daily wage (where your role allows).</li>
+          <li><strong>Mark attendance</strong> — Enter Present, Absent, or Partial hours per person for a selected date; optional extra hours.</li>
+          <li><strong>Weekly salary</strong> — Pick a date range and department, see totals (present, partial, hours, advances, deductions, payment), edit days from the sheet, and export a PDF or CSV.</li>
+          <li><strong>Attendance records</strong> — Browse a week or month grid by department; open a single day to correct an entry.</li>
+          <li><strong>Reports &amp; payroll helpers</strong> — Weekly paid summary, per-staff salary tools, and advance tracking (available depending on your role).</li>
+          <li><strong>Users &amp; roles</strong> — Admins can manage app logins. Other roles see only the sections they are allowed to use.</li>
+          <li><strong>Theme</strong> — Switch light or dark; your choice is remembered on this device.</li>
+        </ul>
+
+        <h3>Roles (summary)</h3>
+        <ul>
+          <li><strong>Admin</strong> — Full access, including user management.</li>
+          <li><strong>User</strong> — Full operational access except user administration.</li>
+          <li><strong>Manager</strong> — Add staff, mark attendance, weekly salary and attendance records; salary/staff editing and advances are restricted.</li>
+        </ul>
+
+        <p class="hint">
+          Connection status appears in the header: live database mode when Supabase is configured, otherwise data is kept in the browser (IndexedDB) until cloud sync is available.
+        </p>
       </section>
     </section>
 
@@ -205,7 +240,7 @@
     <section id="weekly-salary-page" class="page hidden">
       <section class="card">
         <h2>Weekly Salary</h2>
-        <p class="hint">Use <strong>Start Date</strong> and <strong>End Date</strong> for any period — e.g. set them to the first and last day of a month, then <strong>Refresh Salary</strong> for a monthly report. If either date is cleared, the app uses the latest week (Sun–Sat). <strong>Download CSV (Excel)</strong> gives a file you can open in Excel with all columns; the PDF now uses real text so you can select and copy from it.</p>
+        <p class="hint">Use <strong>Start Date</strong> and <strong>End Date</strong> for any period — e.g. set them to the first and last day of a month, then <strong>Refresh Salary</strong> for a monthly report. If either date is cleared, the app uses the latest week (Sun–Sat). <strong>Download CSV (Excel)</strong> gives a file you can open in Excel with all columns; the PDF now uses real text so you can select and copy from it. After data loads, use <strong>Full screen preview</strong> to view wide tables using the full window.</p>
         <form id="salary-form" class="grid-form">
           <label>
             Department
@@ -224,7 +259,14 @@
           <button type="button" id="download-weekly-pdf">Download Weekly PDF</button>
           <button type="button" id="download-weekly-csv">Download CSV (Excel)</button>
         </form>
-        <div id="salary-result" class="result hidden"></div>
+        <div id="salary-result-mount">
+          <div id="salary-result-block">
+            <div id="salary-fullscreen-bar" class="salary-fullscreen-bar hidden">
+              <button type="button" id="salary-fullscreen-open">Full screen preview</button>
+            </div>
+            <div id="salary-result" class="result hidden"></div>
+          </div>
+        </div>
         <div id="salary-attendance-editor" class="result salary-attendance-editor hidden">
           <h3 id="salary-attendance-editor-title">Edit attendance</h3>
           <p id="salary-attendance-editor-hint" class="hint"></p>
@@ -484,6 +526,14 @@
     </section>
   </main>
 
+  <div id="salary-fullscreen-overlay" class="salary-fullscreen-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="salary-fullscreen-title">
+    <div class="salary-fullscreen-header">
+      <span id="salary-fullscreen-title" class="salary-fullscreen-title">Salary tables</span>
+      <button type="button" id="salary-fullscreen-close" class="salary-fullscreen-close">Close</button>
+    </div>
+    <div class="salary-fullscreen-scroll" id="salary-fullscreen-host"></div>
+  </div>
+
   <datalist id="dept-datalist"></datalist>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -492,6 +542,6 @@
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="config.js"></script>
   <script src="supabase.js?v=20260414-5"></script>
-  <script src="script.js?v=20260417-8"></script>
+  <script src="script.js?v=20260417-12"></script>
 </body>
 </html>

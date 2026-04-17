@@ -23,6 +23,13 @@ const salaryForm = document.getElementById("salary-form");
 const salaryStartDateInput = document.getElementById("salary-start-date");
 const salaryEndDateInput = document.getElementById("salary-end-date");
 const salaryResult = document.getElementById("salary-result");
+const salaryResultMount = document.getElementById("salary-result-mount");
+const salaryResultBlock = document.getElementById("salary-result-block");
+const salaryFullscreenBar = document.getElementById("salary-fullscreen-bar");
+const salaryFullscreenOpenBtn = document.getElementById("salary-fullscreen-open");
+const salaryFullscreenOverlay = document.getElementById("salary-fullscreen-overlay");
+const salaryFullscreenHost = document.getElementById("salary-fullscreen-host");
+const salaryFullscreenCloseBtn = document.getElementById("salary-fullscreen-close");
 const applySalaryDeductionsBtn = document.getElementById("apply-salary-deductions");
 const downloadWeeklyPdfBtn = document.getElementById("download-weekly-pdf");
 const downloadWeeklyCsvBtn = document.getElementById("download-weekly-csv");
@@ -86,6 +93,8 @@ const usersTableBody = document.getElementById("users-table-body");
 const dbStatus = document.getElementById("db-status");
 const goDashboardBtn = document.getElementById("go-dashboard");
 const goMarkAttendanceBtn = document.getElementById("go-mark-attendance");
+const openInfoPageBtn = document.getElementById("open-info-page");
+const openInfoFromHomeBtn = document.getElementById("open-info-from-home");
 const themeToggleButtons = document.querySelectorAll("[data-theme-toggle]");
 const homePage = document.getElementById("home-page");
 const addStaffPage = document.getElementById("add-staff-page");
@@ -95,6 +104,7 @@ const staffSalaryPage = document.getElementById("staff-salary-page");
 const advancePage = document.getElementById("advance-page");
 const attendanceRecordsPage = document.getElementById("attendance-records-page");
 const attendancePage = document.getElementById("attendance-page");
+const infoPage = document.getElementById("info-page");
 const openAddStaffPageBtn = document.getElementById("open-add-staff-page");
 const openMarkAttendancePageBtn = document.getElementById("open-mark-attendance-page");
 const openWeeklySalaryPageBtn = document.getElementById("open-weekly-salary-page");
@@ -704,13 +714,32 @@ function openSalaryPageAttendanceEditor(staffId) {
   salaryAttendanceEditor.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
+function closeSalaryTableFullscreen() {
+  if (!salaryResultMount || !salaryResultBlock || !salaryFullscreenOverlay) return;
+  if (salaryFullscreenHost && salaryResultBlock.parentElement === salaryFullscreenHost) {
+    salaryResultMount.appendChild(salaryResultBlock);
+  }
+  salaryFullscreenOverlay.classList.add("hidden");
+  document.body.classList.remove("salary-fullscreen-active");
+}
+
+function openSalaryTableFullscreen() {
+  if (!salaryFullscreenHost || !salaryResultBlock || !salaryFullscreenOverlay) return;
+  if (salaryResult.classList.contains("hidden")) return;
+  salaryFullscreenHost.appendChild(salaryResultBlock);
+  salaryFullscreenOverlay.classList.remove("hidden");
+  document.body.classList.add("salary-fullscreen-active");
+}
+
 function renderSalaryOverview() {
   const { periodLabel, startDate, endDate } = resolveSalaryRange();
   const deptFilter = getDepartmentFilter(filterDeptSalary);
   let activeStaff = getActiveStaff();
   activeStaff = filterStaffByDepartment(activeStaff, deptFilter);
   if (!activeStaff.length) {
+    closeSalaryTableFullscreen();
     salaryResult.classList.add("hidden");
+    if (salaryFullscreenBar) salaryFullscreenBar.classList.add("hidden");
     currentSalaryRows = [];
     closeSalaryPageAttendanceEditor();
     return;
@@ -799,6 +828,7 @@ function renderSalaryOverview() {
   `;
 
   salaryResult.classList.remove("hidden");
+  if (salaryFullscreenBar) salaryFullscreenBar.classList.remove("hidden");
   salaryResult.innerHTML = `
     <p><strong>${periodLabel}:</strong> ${startDate} to ${endDate}</p>
     <div class="table-wrap">
@@ -1455,11 +1485,14 @@ function setPage(pageName) {
     setAuthUI();
     return;
   }
-  if (isManagerUser() && !["home", "add-staff", "mark-attendance", "weekly-salary"].includes(pageName)) {
+  if (isManagerUser() && !["home", "add-staff", "mark-attendance", "weekly-salary", "attendance-records", "info"].includes(pageName)) {
     pageName = "home";
   }
-  if (pageName !== "weekly-salary") closeSalaryPageAttendanceEditor();
-  const pages = [homePage, addStaffPage, weeklySalaryPage, weeklyPaidPage, staffSalaryPage, advancePage, attendanceRecordsPage, attendancePage];
+  if (pageName !== "weekly-salary") {
+    closeSalaryPageAttendanceEditor();
+    closeSalaryTableFullscreen();
+  }
+  const pages = [homePage, addStaffPage, weeklySalaryPage, weeklyPaidPage, staffSalaryPage, advancePage, attendanceRecordsPage, attendancePage, infoPage];
   if (isAdminUser()) pages.push(userManagementPage);
   pages.forEach((p) => p.classList.add("hidden"));
   if (pageName === "home") homePage.classList.remove("hidden");
@@ -1470,6 +1503,7 @@ function setPage(pageName) {
   if (pageName === "advance") advancePage.classList.remove("hidden");
   if (pageName === "attendance-records") attendanceRecordsPage.classList.remove("hidden");
   if (pageName === "mark-attendance") attendancePage.classList.remove("hidden");
+  if (pageName === "info") infoPage.classList.remove("hidden");
   if (pageName === "user-management" && isAdminUser()) userManagementPage.classList.remove("hidden");
   refreshDepartmentDatalistAndFilters();
 }
@@ -1516,7 +1550,7 @@ function isAdminUser() {
   return currentUser?.role === "admin";
 }
 
-/** Managers may add new staff and mark attendance only — no salary/department list edits or other modules. */
+/** Managers may add staff, mark attendance, weekly salary view, and attendance records — no salary/staff edits, department list, advances, etc. */
 function isManagerUser() {
   return currentUser?.role === "manager";
 }
@@ -1546,6 +1580,7 @@ function setAuthUI() {
   const loggedIn = !!currentUser;
   loginPage.classList.toggle("hidden", loggedIn);
   if (!loggedIn) {
+    closeSalaryTableFullscreen();
     const pages = [
       homePage,
       addStaffPage,
@@ -1555,6 +1590,7 @@ function setAuthUI() {
       advancePage,
       attendanceRecordsPage,
       attendancePage,
+      infoPage,
       userManagementPage,
     ];
     pages.forEach((p) => p.classList.add("hidden"));
@@ -1857,8 +1893,23 @@ if (downloadWeeklyCsvBtn) {
   });
 }
 
+if (salaryFullscreenOpenBtn) {
+  salaryFullscreenOpenBtn.addEventListener("click", () => openSalaryTableFullscreen());
+}
+if (salaryFullscreenCloseBtn) {
+  salaryFullscreenCloseBtn.addEventListener("click", () => closeSalaryTableFullscreen());
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (salaryFullscreenOverlay && !salaryFullscreenOverlay.classList.contains("hidden")) {
+    closeSalaryTableFullscreen();
+  }
+});
+
 goMarkAttendanceBtn.addEventListener("click", () => setPage("mark-attendance"));
 goDashboardBtn.addEventListener("click", () => setPage("home"));
+if (openInfoPageBtn) openInfoPageBtn.addEventListener("click", () => setPage("info"));
+if (openInfoFromHomeBtn) openInfoFromHomeBtn.addEventListener("click", () => setPage("info"));
 openAddStaffPageBtn.addEventListener("click", () => setPage("add-staff"));
 openMarkAttendancePageBtn.addEventListener("click", () => setPage("mark-attendance"));
 openWeeklySalaryPageBtn.addEventListener("click", () => setPage("weekly-salary"));
@@ -1876,6 +1927,9 @@ openAttendanceUpdateBtn.addEventListener("click", () => {
   attendanceUpdateDate.value = todayString();
   renderAttendanceUpdateStaffOptions();
   loadAttendanceUpdateFormFromExisting();
+  requestAnimationFrame(() => {
+    attendanceUpdateCard.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 });
 attendanceUpdateCancelBtn.addEventListener("click", () => {
   attendanceUpdateCard.classList.add("hidden");
@@ -1887,7 +1941,7 @@ attendanceUpdateDate.addEventListener("change", loadAttendanceUpdateFormFromExis
 attendanceUpdateStaff.addEventListener("change", loadAttendanceUpdateFormFromExisting);
 attendanceUpdateForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!hasFullStaffAccess()) return;
+  if (!currentUser || (!hasFullStaffAccess() && !isManagerUser())) return;
   const staffId = attendanceUpdateStaff.value;
   const date = attendanceUpdateDate.value;
   if (!staffId || !date) return;
