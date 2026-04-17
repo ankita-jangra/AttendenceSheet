@@ -1,16 +1,21 @@
 const STORAGE_KEY = "attendance_salary_app_v1";
 const DB_NAME = "attendance_salary_db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STAFF_STORE = "staff";
 const ATTENDANCE_STORE = "attendance";
 const ADVANCE_STORE = "advances";
 const USERS_STORE = "users";
+const SETTINGS_STORE = "settings";
 const AUTH_USER_KEY = "attendance_auth_user";
 const WORKING_HOURS_PER_DAY = 8;
+const DEFAULT_DEPARTMENT = "General";
+const CUSTOM_DEPTS_STORAGE_KEY = "attendance_custom_departments_v1";
+const THEME_STORAGE_KEY = "attendance_theme";
 
 const staffForm = document.getElementById("staff-form");
 const staffNameInput = document.getElementById("staff-name");
 const staffNameHindiInput = document.getElementById("staff-name-hindi");
+const staffDepartmentInput = document.getElementById("staff-department");
 const salaryPerDayInput = document.getElementById("salary-per-day");
 const staffTableBody = document.getElementById("staff-table-body");
 
@@ -20,6 +25,13 @@ const salaryEndDateInput = document.getElementById("salary-end-date");
 const salaryResult = document.getElementById("salary-result");
 const applySalaryDeductionsBtn = document.getElementById("apply-salary-deductions");
 const downloadWeeklyPdfBtn = document.getElementById("download-weekly-pdf");
+const downloadWeeklyCsvBtn = document.getElementById("download-weekly-csv");
+const salaryAttendanceEditor = document.getElementById("salary-attendance-editor");
+const salaryAttendanceEditorTitle = document.getElementById("salary-attendance-editor-title");
+const salaryAttendanceEditorHint = document.getElementById("salary-attendance-editor-hint");
+const salaryAttendanceEditorForm = document.getElementById("salary-attendance-editor-form");
+const salaryAttendanceEditorBody = document.getElementById("salary-attendance-editor-body");
+const salaryAttendanceEditorCancelBtn = document.getElementById("salary-attendance-editor-cancel");
 
 const attendanceTableBody = document.getElementById("attendance-table-body");
 const bulkAttendanceForm = document.getElementById("bulk-attendance-form");
@@ -74,6 +86,7 @@ const usersTableBody = document.getElementById("users-table-body");
 const dbStatus = document.getElementById("db-status");
 const goDashboardBtn = document.getElementById("go-dashboard");
 const goMarkAttendanceBtn = document.getElementById("go-mark-attendance");
+const themeToggleButtons = document.querySelectorAll("[data-theme-toggle]");
 const homePage = document.getElementById("home-page");
 const addStaffPage = document.getElementById("add-staff-page");
 const weeklySalaryPage = document.getElementById("weekly-salary-page");
@@ -89,11 +102,21 @@ const openWeeklyPaidPageBtn = document.getElementById("open-weekly-paid-page");
 const openStaffSalaryPageBtn = document.getElementById("open-staff-salary-page");
 const openAdvancePageBtn = document.getElementById("open-advance-page");
 const openAttendanceRecordsPageBtn = document.getElementById("open-attendance-records-page");
+const filterDeptSalary = document.getElementById("filter-dept-salary");
+const filterDeptWeeklyPaid = document.getElementById("filter-dept-weekly-paid");
+const filterDeptRecords = document.getElementById("filter-dept-records");
+const filterDeptMark = document.getElementById("filter-dept-mark");
+const filterDeptStaff = document.getElementById("filter-dept-staff");
+const filterDeptAdvance = document.getElementById("filter-dept-advance");
+const newDepartmentNameInput = document.getElementById("new-department-name");
+const customDepartmentsList = document.getElementById("custom-departments-list");
 
 let state = { staff: [], attendance: [], advances: [], users: [] };
+let customDepartments = [];
 let currentSalaryRows = [];
 let currentWeeklySummaryRange = null;
 let currentWeeklyEditStaffId = null;
+let salaryPageAttendanceEditStaffId = null;
 let useCloudDb = false;
 let dbRef = null;
 let currentUser = null;
@@ -156,6 +179,9 @@ function openDatabase() {
         const u = db.createObjectStore(USERS_STORE, { keyPath: "id" });
         u.createIndex("username", "username", { unique: true });
       }
+      if (!db.objectStoreNames.contains(SETTINGS_STORE)) {
+        db.createObjectStore(SETTINGS_STORE, { keyPath: "key" });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -176,6 +202,15 @@ function putOne(db, storeName, value) {
     const tx = db.transaction(storeName, "readwrite");
     const req = tx.objectStore(storeName).put(value);
     req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function getSetting(db, key) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SETTINGS_STORE, "readonly");
+    const req = tx.objectStore(SETTINGS_STORE).get(key);
+    req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
@@ -225,6 +260,238 @@ function toLocalIsoDate(date) {
 
 function todayString() {
   return toLocalIsoDate(new Date());
+}
+
+function escapeHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function normalizeDepartment(personOrString) {
+  if (typeof personOrString === "string") {
+    const t = personOrString.trim();
+    return t || DEFAULT_DEPARTMENT;
+  }
+  const t = (personOrString?.department || "").trim();
+  return t || DEFAULT_DEPARTMENT;
+}
+
+function loadCustomDepartments() {
+  try {
+    let raw = localStorage.getItem(CUSTOM_DEPTS_STORAGE_KEY);
+    if (!raw) raw = sessionStorage.getItem(CUSTOM_DEPTS_STORAGE_KEY);
+    customDepartments = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(customDepartments)) customDepartments = [];
+    customDepartments = customDepartments.map((d) => String(d || "").trim()).filter(Boolean);
+  } catch (_err) {
+    customDepartments = [];
+  }
+}
+
+/** Union of two name lists, case-insensitive de-duplication, preserves first-seen casing. */
+function mergeDepartmentNameLists(localList, remoteList) {
+  const seen = new Set();
+  const out = [];
+  for (const list of [localList, remoteList]) {
+    if (!Array.isArray(list)) continue;
+    for (const d of list) {
+      const s = String(d || "").trim();
+      if (!s) continue;
+      const low = s.toLowerCase();
+      if (seen.has(low)) continue;
+      seen.add(low);
+      out.push(s);
+    }
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
+async function mergeCustomDepartmentsFromIndexedDB() {
+  if (useCloudDb || !dbRef) return;
+  try {
+    const row = await getSetting(dbRef, "custom_departments");
+    const fromDb = Array.isArray(row?.value) ? row.value : [];
+    if (!fromDb.length) return;
+    const seen = new Set(customDepartments.map((d) => d.toLowerCase()));
+    let changed = false;
+    for (const d of fromDb) {
+      const s = String(d || "").trim();
+      if (!s) continue;
+      const lower = s.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      customDepartments.push(s);
+      changed = true;
+    }
+    if (changed) {
+      customDepartments.sort((a, b) => a.localeCompare(b));
+      persistCustomDepartmentsToLocal();
+      if (dbRef) {
+        putOne(dbRef, SETTINGS_STORE, { key: "custom_departments", value: [...customDepartments] }).catch(() => {});
+      }
+    }
+  } catch (_err) {
+    /* ignore */
+  }
+}
+
+/** Local/session only — safe to call on startup after merging with cloud (does not overwrite Supabase). */
+function persistCustomDepartmentsToLocal() {
+  const payload = JSON.stringify(customDepartments);
+  try {
+    localStorage.setItem(CUSTOM_DEPTS_STORAGE_KEY, payload);
+  } catch (_e) {
+    try {
+      sessionStorage.setItem(CUSTOM_DEPTS_STORAGE_KEY, payload);
+    } catch (_e2) {
+      /* memory-only fallback */
+    }
+  }
+}
+
+function saveCustomDepartments() {
+  persistCustomDepartmentsToLocal();
+  if (useCloudDb && typeof window.AttendanceCloud?.saveCustomDepartments === "function") {
+    window.AttendanceCloud.saveCustomDepartments([...customDepartments]).catch((err) => {
+      console.warn("Could not sync custom departments to Supabase (run app_settings SQL in supabase-schema.sql):", err);
+    });
+  } else if (!useCloudDb && dbRef) {
+    putOne(dbRef, SETTINGS_STORE, { key: "custom_departments", value: [...customDepartments] }).catch(() => {});
+  }
+}
+
+/** @returns {"added"|"duplicate"|"empty"|"default_name"} */
+function addCustomDepartment(raw) {
+  const name = (raw || "").trim();
+  if (!name) return "empty";
+  if (name.toLowerCase() === DEFAULT_DEPARTMENT.toLowerCase()) return "default_name";
+  if (customDepartments.some((d) => d.toLowerCase() === name.toLowerCase())) return "duplicate";
+  customDepartments.push(name);
+  customDepartments.sort((a, b) => a.localeCompare(b));
+  saveCustomDepartments();
+  return "added";
+}
+
+function removeCustomDepartment(name) {
+  customDepartments = customDepartments.filter((d) => d !== name);
+  saveCustomDepartments();
+}
+
+function collectAllDepartmentNames() {
+  const set = new Set([DEFAULT_DEPARTMENT, ...customDepartments]);
+  state.staff.forEach((s) => set.add(normalizeDepartment(s)));
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+function renderCustomDepartmentsList() {
+  if (!customDepartmentsList) return;
+  const names = [...customDepartments].sort((a, b) => a.localeCompare(b));
+  if (!names.length) {
+    customDepartmentsList.innerHTML = "<li class=\"hint\">No saved department names yet. Add one above, or assign a department when adding or editing staff.</li>";
+    return;
+  }
+  customDepartmentsList.innerHTML = names.map((n) => {
+    const inUse = state.staff.some((s) => normalizeDepartment(s) === n);
+    const enc = encodeURIComponent(n);
+    return `
+      <li>
+        <span>${escapeHtml(n)}</span>
+        ${inUse ? "<span class=\"hint\">(assigned to staff)</span>" : `<button type="button" class="js-remove-custom-dept" data-dept="${enc}">Remove</button>`}
+      </li>
+    `;
+  }).join("");
+}
+
+function clearDomNode(el) {
+  if (!el) return;
+  if (typeof el.replaceChildren === "function") {
+    el.replaceChildren();
+  } else {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  }
+}
+
+function fillDepartmentFilterSelect(selectEl) {
+  if (!selectEl) return;
+  const prev = selectEl.value;
+  const names = collectAllDepartmentNames();
+  clearDomNode(selectEl);
+  const optAll = document.createElement("option");
+  optAll.value = "";
+  optAll.textContent = "All departments";
+  selectEl.appendChild(optAll);
+  names.forEach((n) => {
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = n;
+    selectEl.appendChild(opt);
+  });
+  if (prev && [...selectEl.options].some((o) => o.value === prev)) selectEl.value = prev;
+}
+
+/** Options for per-staff department &lt;select&gt; (full list, not datalist). */
+function buildDepartmentSelectOptionsHtml(currentDept) {
+  const names = collectAllDepartmentNames();
+  const curNorm = normalizeDepartment({ department: currentDept });
+  return names
+    .map((n) => {
+      const selected = n.toLowerCase() === curNorm.toLowerCase() ? " selected" : "";
+      return `<option value="${escapeHtml(n)}"${selected}>${escapeHtml(n)}</option>`;
+    })
+    .join("");
+}
+
+const DEPARTMENT_FILTER_IDS = [
+  "filter-dept-salary",
+  "filter-dept-weekly-paid",
+  "filter-dept-records",
+  "filter-dept-mark",
+  "filter-dept-staff",
+  "filter-dept-advance",
+];
+
+function refreshDepartmentDatalistAndFilters() {
+  try {
+    const dl = document.getElementById("dept-datalist");
+    if (dl) {
+      clearDomNode(dl);
+      collectAllDepartmentNames().forEach((n) => {
+        const opt = document.createElement("option");
+        opt.value = n;
+        dl.appendChild(opt);
+      });
+    }
+    DEPARTMENT_FILTER_IDS.forEach((id) => {
+      fillDepartmentFilterSelect(document.getElementById(id));
+    });
+  } catch (_err) {
+    /* ignore */
+  }
+}
+
+function getDepartmentFilter(selectEl) {
+  const v = selectEl?.value;
+  if (!v || v === "") return null;
+  return v;
+}
+
+function filterStaffByDepartment(list, deptFilter) {
+  if (!deptFilter) return list;
+  return list.filter((p) => normalizeDepartment(p) === deptFilter);
+}
+
+async function ensureStaffDepartments() {
+  const needSave = [];
+  for (const p of state.staff) {
+    if (!p.department || !String(p.department).trim()) {
+      p.department = DEFAULT_DEPARTMENT;
+      needSave.push(p);
+    }
+  }
+  await Promise.all(needSave.map((p) => saveStaffRecord(p)));
 }
 
 function getStaffById(staffId) {
@@ -350,8 +617,13 @@ function resolveSalaryRange() {
   const customEnd = salaryEndDateInput.value;
 
   if (customStart && customEnd && customStart <= customEnd) {
+    const startMs = new Date(`${customStart}T12:00:00`).getTime();
+    const endMs = new Date(`${customEnd}T12:00:00`).getTime();
+    const dayCount = Math.round((endMs - startMs) / 86400000) + 1;
+    const periodLabel =
+      dayCount >= 28 && dayCount <= 31 ? "Selected period (full month)" : "Selected date range";
     return {
-      periodLabel: "Weekly Date Range",
+      periodLabel,
       startDate: customStart,
       endDate: customEnd,
     };
@@ -387,12 +659,60 @@ function getDailySalaryValue(staff, dateIso) {
   return 0;
 }
 
+function closeSalaryPageAttendanceEditor() {
+  salaryPageAttendanceEditStaffId = null;
+  if (salaryAttendanceEditor) salaryAttendanceEditor.classList.add("hidden");
+}
+
+function openSalaryPageAttendanceEditor(staffId) {
+  if (!salaryAttendanceEditor || !salaryAttendanceEditorBody) return;
+  const { startDate, endDate } = resolveSalaryRange();
+  if (!startDate || !endDate || startDate > endDate) {
+    window.alert("Set a valid start and end date first, then Refresh Salary.");
+    return;
+  }
+  const staff = getStaffById(staffId);
+  if (!staff) return;
+  salaryPageAttendanceEditStaffId = staffId;
+  salaryAttendanceEditor.classList.remove("hidden");
+  salaryAttendanceEditorTitle.textContent = `Edit attendance — ${staff.name}`;
+  salaryAttendanceEditorHint.textContent = `Adjust each day in this range (${startDate} to ${endDate}). Save updates the summary above.`;
+  const days = getDateRangeList(startDate, endDate);
+  salaryAttendanceEditorBody.innerHTML = days.map((date) => {
+    const existing = state.attendance.find((a) => a.staffId === staffId && a.date === date);
+    const status = existing?.status || "Absent";
+    const partialHours =
+      status === "Partial"
+        ? Math.min(WORKING_HOURS_PER_DAY, Number(existing?.hours || 0) - Number(existing?.extraHours || 0))
+        : 4;
+    const extraHours = Number(existing?.extraHours || 0);
+    return `
+      <tr data-salary-edit-date="${date}">
+        <td>${date}</td>
+        <td>
+          <select class="compact-input js-salary-page-status" aria-label="Status ${date}">
+            <option value="Present" ${status === "Present" ? "selected" : ""}>Present</option>
+            <option value="Absent" ${status === "Absent" ? "selected" : ""}>Absent</option>
+            <option value="Partial" ${status === "Partial" ? "selected" : ""}>Partial</option>
+          </select>
+        </td>
+        <td><input type="number" class="compact-input js-salary-page-partial" min="0" max="8" step="0.5" value="${partialHours}" ${status === "Partial" ? "" : "disabled"} aria-label="Partial hours ${date}"></td>
+        <td><input type="number" class="compact-input js-salary-page-extra" min="0" max="16" step="0.5" value="${extraHours}" aria-label="Extra hours ${date}"></td>
+      </tr>
+    `;
+  }).join("");
+  salaryAttendanceEditor.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
 function renderSalaryOverview() {
   const { periodLabel, startDate, endDate } = resolveSalaryRange();
-  const activeStaff = getActiveStaff();
+  const deptFilter = getDepartmentFilter(filterDeptSalary);
+  let activeStaff = getActiveStaff();
+  activeStaff = filterStaffByDepartment(activeStaff, deptFilter);
   if (!activeStaff.length) {
     salaryResult.classList.add("hidden");
     currentSalaryRows = [];
+    closeSalaryPageAttendanceEditor();
     return;
   }
 
@@ -405,11 +725,19 @@ function renderSalaryOverview() {
     return { person, s, adv, suggestedDeduction, payment, nextAdvance };
   });
 
+  const totalPaymentAll = currentSalaryRows.reduce((sum, row) => sum + row.payment, 0);
+  const totalHoursAll = currentSalaryRows.reduce((sum, row) => sum + row.s.totalHours, 0);
+
+  const deductionReadOnly = isManagerUser();
   const rows = currentSalaryRows.map((row) => {
     const { person, s, adv, suggestedDeduction, payment, nextAdvance } = row;
+    const deductCell = deductionReadOnly
+      ? `<td>${formatCurrency(suggestedDeduction)}</td>`
+      : `<td><input type="number" class="compact-input js-deduct-input" data-staff-id="${person.id}" min="0" step="0.01" value="${suggestedDeduction.toFixed(2)}"></td>`;
     return `
       <tr>
-        <td>${person.name}</td>
+        <td>${escapeHtml(person.name)}</td>
+        <td>${escapeHtml(normalizeDepartment(person))}</td>
         <td>${formatCurrency(person.salaryPerDay)}</td>
         <td>${s.presentDays}</td>
         <td>${s.partialDays}</td>
@@ -419,12 +747,23 @@ function renderSalaryOverview() {
         <td>${s.totalHours}</td>
         <td>${formatCurrency(adv.previous)}</td>
         <td>${formatCurrency(adv.takenInRange)}</td>
-        <td><input type="number" class="compact-input js-deduct-input" data-staff-id="${person.id}" min="0" step="0.01" value="${suggestedDeduction.toFixed(2)}"></td>
+        ${deductCell}
         <td>${formatCurrency(payment)}</td>
         <td>${formatCurrency(nextAdvance)}</td>
+        <td><button type="button" class="js-salary-edit-attendance" data-staff-id="${person.id}">Update attendance</button></td>
       </tr>
     `;
   }).join("");
+
+  const footerRow = `
+    <tr class="salary-table-footer">
+      <td colspan="8"><strong>Total (all staff)</strong></td>
+      <td><strong>${totalHoursAll.toFixed(1)}</strong></td>
+      <td colspan="3"></td>
+      <td><strong>${formatCurrency(totalPaymentAll)}</strong></td>
+      <td colspan="2"></td>
+    </tr>
+  `;
 
   const dateList = getDateRangeList(startDate, endDate);
   const dateHead = dateList.map((d) => `<th>${d}</th>`).join("");
@@ -434,12 +773,30 @@ function renderSalaryOverview() {
     const total = perDayValues.reduce((sum, val) => sum + val, 0);
     return `
       <tr>
-        <td>${person.name}</td>
+        <td>${escapeHtml(person.name)}</td>
+        <td>${escapeHtml(normalizeDepartment(person))}</td>
         ${perDayValues.map((v) => `<td>${formatCurrency(v)}</td>`).join("")}
         <td><strong>${formatCurrency(total)}</strong></td>
       </tr>
     `;
   }).join("");
+  const dateWiseTotalRow = `
+    <tr class="salary-table-footer">
+      <td colspan="2"><strong>Total (all staff)</strong></td>
+      ${dateList
+        .map((d) => {
+          const daySum = currentSalaryRows.reduce((sum, row) => sum + getDailySalaryValue(row.person, d), 0);
+          return `<td><strong>${formatCurrency(daySum)}</strong></td>`;
+        })
+        .join("")}
+      <td><strong>${formatCurrency(
+        currentSalaryRows.reduce((sum, row) => {
+          const person = row.person;
+          return sum + dateList.reduce((s, d) => s + getDailySalaryValue(person, d), 0);
+        }, 0),
+      )}</strong></td>
+    </tr>
+  `;
 
   salaryResult.classList.remove("hidden");
   salaryResult.innerHTML = `
@@ -449,6 +806,7 @@ function renderSalaryOverview() {
         <thead>
           <tr>
             <th>Staff</th>
+            <th>Department</th>
             <th>Daily Wage</th>
             <th>Present</th>
             <th>Partial</th>
@@ -461,9 +819,11 @@ function renderSalaryOverview() {
             <th>Deduct</th>
             <th>Payment</th>
             <th>Advance Next Week</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
+        <tfoot>${footerRow}</tfoot>
       </table>
     </div>
     <h3>Date-wise Salary Table</h3>
@@ -472,11 +832,13 @@ function renderSalaryOverview() {
         <thead>
           <tr>
             <th>Staff</th>
+            <th>Department</th>
             ${dateHead}
             <th>Total</th>
           </tr>
         </thead>
         <tbody>${dateRows}</tbody>
+        <tfoot>${dateWiseTotalRow}</tfoot>
       </table>
     </div>
   `;
@@ -493,25 +855,37 @@ function getDailyMarker(staffId, dateIso) {
   return "A";
 }
 
-async function exportWeeklyPdf() {
-  if (!window.jspdf || !window.jspdf.jsPDF || typeof window.jspdf.jsPDF !== "function" || !window.html2canvas) return;
-  const activeStaff = getActiveStaff();
-  if (!activeStaff.length) return;
+function escapeCsvField(val) {
+  const s = String(val ?? "");
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+/** Shared rows for PDF (real text, selectable) and CSV (Excel paste). */
+async function buildWeeklySheetExportPayload() {
+  if (!currentUser || (!hasFullStaffAccess() && !isManagerUser())) return null;
+  const deptFilter = getDepartmentFilter(filterDeptSalary);
+  let activeStaff = getActiveStaff();
+  activeStaff = filterStaffByDepartment(activeStaff, deptFilter);
+  if (!activeStaff.length) return null;
 
   const { startDate, endDate } = resolveSalaryRange();
   const weekDays = getWeekDays(startDate, endDate);
-  const title = `Week Sheet (${formatDateLabel(startDate)} to ${formatDateLabel(endDate)})`;
+  const deptNote = deptFilter ? ` — ${deptFilter}` : "";
+  const sheetLabel = weekDays.length > 10 ? "Salary sheet" : "Week sheet";
+  const title = `${sheetLabel} (${formatDateLabel(startDate)} to ${formatDateLabel(endDate)})${deptNote}`;
   let grandTotal = 0;
   const bodyPromises = activeStaff.map(async (person, idx) => {
     const salary = calculateSalaryForStaff(person, startDate, endDate);
     const totalDays = (salary.totalHours / WORKING_HOURS_PER_DAY).toFixed(2).replace(/\.00$/, "");
     const amount = Math.round(salary.payable);
     grandTotal += amount;
-    const hindiName = person.hindiName || await transliterateToHindi(person.name) || person.name;
+    const hindiName = person.hindiName || (await transliterateToHindi(person.name)) || person.name;
     return {
       sr: String(idx + 1),
       nameEn: person.name,
       nameHi: hindiName,
+      dept: normalizeDepartment(person),
       wage: String(person.salaryPerDay),
       dayMarkers: weekDays.map((d) => getDailyMarker(person.id, d.iso)),
       totalDays,
@@ -523,91 +897,140 @@ async function exportWeeklyPdf() {
     };
   });
   const body = await Promise.all(bodyPromises);
-  const temp = document.createElement("div");
-  temp.style.position = "fixed";
-  temp.style.left = "-99999px";
-  temp.style.top = "0";
-  // Match A4 landscape render width more closely for readable scaling.
-  temp.style.width = "1120px";
-  temp.style.background = "#ffffff";
-  temp.style.color = "#111827";
-  temp.style.padding = "16px";
-  temp.style.fontFamily = "'Noto Sans Devanagari', 'Mangal', Arial, sans-serif";
 
-  const tableHead = `
-    <tr style="background:#0e5a73;color:#ffffff;">
-      <th style="padding:4px;border:1px solid #cbd5e1;width:28px;">Sr</th>
-      <th style="padding:4px;border:1px solid #cbd5e1;width:78px;">Name (English)</th>
-      <th style="padding:4px;border:1px solid #cbd5e1;width:78px;">Name (Hindi)</th>
-      <th style="padding:4px;border:1px solid #cbd5e1;width:62px;">Daily Wage</th>
-      ${weekDays.map((d) => `<th style="padding:3px;border:1px solid #cbd5e1;width:38px;">${d.name}<br>(${d.label})</th>`).join("")}
-      <th style="padding:4px;border:1px solid #cbd5e1;width:62px;">Total days</th>
-      <th style="padding:4px;border:1px solid #cbd5e1;width:62px;">Extra Hours</th>
-      <th style="padding:4px;border:1px solid #cbd5e1;width:62px;">Amount</th>
-      <th style="padding:4px;border:1px solid #cbd5e1;width:62px;">Payment</th>
-      <th style="padding:4px;border:1px solid #cbd5e1;width:78px;">Notes</th>
-      <th style="padding:4px;border:1px solid #cbd5e1;width:58px;">Sign</th>
-    </tr>
-  `;
-  const tableBody = body.map((r) => `
-    <tr>
-      <td style="padding:4px;border:1px solid #e5e7eb;">${r.sr}</td>
-      <td style="padding:4px;border:1px solid #e5e7eb;">${r.nameEn}</td>
-      <td style="padding:4px;border:1px solid #e5e7eb;">${r.nameHi}</td>
-      <td style="padding:4px;border:1px solid #e5e7eb;">${r.wage}</td>
-      ${r.dayMarkers.map((m) => `<td style="padding:4px;border:1px solid #e5e7eb;text-align:center;">${m}</td>`).join("")}
-      <td style="padding:4px;border:1px solid #e5e7eb;">${r.totalDays}</td>
-      <td style="padding:4px;border:1px solid #e5e7eb;">${r.extraHours}</td>
-      <td style="padding:4px;border:1px solid #e5e7eb;">${r.amount}</td>
-      <td style="padding:4px;border:1px solid #e5e7eb;">${r.payment}</td>
-      <td style="padding:4px;border:1px solid #e5e7eb;">${r.notes}</td>
-      <td style="padding:4px;border:1px solid #e5e7eb;">${r.sign}</td>
-    </tr>
-  `).join("");
-  const footer = `
-    <tr>
-      <td colspan="${4 + weekDays.length + 2}" style="padding:4px;border:1px solid #e5e7eb;"></td>
-      <td style="padding:4px;border:1px solid #e5e7eb;font-weight:700;">Total</td>
-      <td style="padding:4px;border:1px solid #e5e7eb;font-weight:700;">${grandTotal}</td>
-      <td style="padding:4px;border:1px solid #e5e7eb;"></td>
-      <td style="padding:4px;border:1px solid #e5e7eb;"></td>
-    </tr>
-  `;
-  temp.innerHTML = `
-    <h2 style="margin:0 0 10px 0;">${title}</h2>
-    <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;">
-      <thead>${tableHead}</thead>
-      <tbody>${tableBody}${footer}</tbody>
-    </table>
-  `;
-  document.body.appendChild(temp);
+  const headRow = [
+    "Sr",
+    "Name (En)",
+    "Name (Hi)",
+    "Dept",
+    "Wage",
+    ...weekDays.map((d) => `${d.name} ${d.label}`),
+    "Days",
+    "Ex",
+    "Amt",
+    "Pay",
+    "Notes",
+    "Sign",
+  ];
+  const bodyRows = body.map((r) => [
+    r.sr,
+    r.nameEn,
+    r.nameHi,
+    r.dept,
+    r.wage,
+    ...r.dayMarkers,
+    r.totalDays,
+    r.extraHours,
+    r.amount,
+    r.payment,
+    r.notes,
+    r.sign,
+  ]);
 
-  const canvas = await window.html2canvas(temp, { scale: 2, backgroundColor: "#ffffff", useCORS: true });
-  document.body.removeChild(temp);
-  const imgData = canvas.toDataURL("image/png");
+  return {
+    title,
+    startDate,
+    endDate,
+    weekDays,
+    headRow,
+    bodyRows,
+    grandTotal,
+  };
+}
+
+async function exportWeeklySheetCsv() {
+  const data = await buildWeeklySheetExportPayload();
+  if (!data) return;
+  const lines = [];
+  lines.push(data.headRow.map(escapeCsvField).join(","));
+  data.bodyRows.forEach((row) => {
+    lines.push(row.map(escapeCsvField).join(","));
+  });
+  const payCol = 5 + data.weekDays.length + 3;
+  const totalLine = Array(data.headRow.length).fill("");
+  totalLine[0] = "Total payment (all staff)";
+  totalLine[payCol] = String(data.grandTotal);
+  lines.push(totalLine.map(escapeCsvField).join(","));
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `attendance-week-${data.startDate}-to-${data.endDate}.csv`;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function exportWeeklyPdf() {
+  if (!window.jspdf?.jsPDF || typeof window.jspdf.jsPDF !== "function") return;
+  const data = await buildWeeklySheetExportPayload();
+  if (!data) return;
   const doc = new window.jspdf.jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const ratio = Math.min((pageWidth - 24) / canvas.width, (pageHeight - 24) / canvas.height);
-  const renderWidth = canvas.width * ratio;
-  const renderHeight = canvas.height * ratio;
-  const x = (pageWidth - renderWidth) / 2;
-  const y = 12;
-  doc.addImage(imgData, "PNG", x, y, renderWidth, renderHeight);
-  doc.save(`attendance-week-${startDate}-to-${endDate}.pdf`);
+  if (typeof doc.autoTable !== "function") {
+    window.alert("PDF table could not load. Use “Download CSV (Excel)” to copy data into Excel.");
+    return;
+  }
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(11);
+  const titleLines = doc.splitTextToSize(data.title, doc.internal.pageSize.getWidth() - 40);
+  doc.text(titleLines, 24, 28);
+  const startY = 28 + titleLines.length * 12 + 4;
+  doc.autoTable({
+    head: [data.headRow],
+    body: data.bodyRows,
+    startY,
+    styles: { fontSize: 9, cellPadding: 2, valign: "middle", overflow: "linebreak" },
+    headStyles: { fillColor: [15, 118, 110], textColor: 255, fontStyle: "bold", fontSize: 9 },
+    bodyStyles: { fontSize: 9 },
+    theme: "grid",
+    margin: { left: 20, right: 20 },
+    tableWidth: "auto",
+    showHead: "everyPage",
+  });
+  const fy = doc.lastAutoTable?.finalY ?? startY;
+  doc.setFontSize(10);
+  doc.text(`Total payment (all staff): ${data.grandTotal}`, 24, fy + 14);
+  doc.save(`attendance-week-${data.startDate}-to-${data.endDate}.pdf`);
 }
 
 function renderStaff() {
-  const activeStaff = getActiveStaff();
-  if (!activeStaff.length) {
-    staffTableBody.innerHTML = '<tr><td colspan="4" class="empty">No staff added yet.</td></tr>';
+  const deptFilter = getDepartmentFilter(filterDeptStaff);
+  let list = getActiveStaff();
+  list = filterStaffByDepartment(list, deptFilter);
+  const staffTheadRow = document.querySelector("#staff-salary-page table thead tr");
+  if (staffTheadRow) {
+    staffTheadRow.innerHTML = hasFullStaffAccess()
+      ? "<th>Name</th><th>Department</th><th>Salary / Day</th><th>Salary / Hour (8h/day)</th><th>Action</th>"
+      : "<th>Name</th><th>Department</th><th>Salary / Day</th><th>Salary / Hour (8h/day)</th>";
+  }
+  const emptyCols = hasFullStaffAccess() ? 5 : 4;
+  if (!list.length) {
+    staffTableBody.innerHTML = `<tr><td colspan="${emptyCols}" class="empty">No staff added yet.</td></tr>`;
     return;
   }
-  staffTableBody.innerHTML = activeStaff.map((person) => {
+  const readonly = !hasFullStaffAccess();
+  staffTableBody.innerHTML = list.map((person) => {
     const hourly = person.salaryPerDay / WORKING_HOURS_PER_DAY;
+    const dept = normalizeDepartment(person);
+    if (readonly) {
+      return `
+      <tr>
+        <td>${escapeHtml(person.name)}</td>
+        <td>${escapeHtml(dept)}</td>
+        <td>${formatCurrency(person.salaryPerDay)}</td>
+        <td>${formatCurrency(hourly)}</td>
+      </tr>`;
+    }
     return `
       <tr>
-        <td>${person.name}</td>
+        <td>${escapeHtml(person.name)}</td>
+        <td>
+          <select class="compact-input dept-input-wide js-staff-dept-input" data-staff-id="${person.id}" data-prev-dept="${encodeURIComponent(dept)}" title="Choose department" aria-label="Department for ${escapeHtml(person.name)}">
+            ${buildDepartmentSelectOptionsHtml(dept)}
+          </select>
+        </td>
         <td>${formatCurrency(person.salaryPerDay)}</td>
         <td>${formatCurrency(hourly)}</td>
         <td>
@@ -618,6 +1041,48 @@ function renderStaff() {
       </tr>
     `;
   }).join("");
+}
+
+function readStoredPrevDepartment(input, person) {
+  const raw = input.getAttribute("data-prev-dept");
+  if (!raw) return normalizeDepartment(person);
+  try {
+    return decodeURIComponent(raw);
+  } catch (_e) {
+    return normalizeDepartment(person);
+  }
+}
+
+async function persistStaffDepartmentChange(input) {
+  if (!hasFullStaffAccess()) return;
+  const staffId = input.dataset.staffId;
+  const person = getStaffById(staffId);
+  if (!person) return;
+  const next = (input.value || "").trim() || DEFAULT_DEPARTMENT;
+  const prev = readStoredPrevDepartment(input, person).trim();
+  if (next.toLowerCase() === prev.toLowerCase()) return;
+  const rollbackDept = person.department;
+  person.department = next;
+  try {
+    await saveStaffRecord(person);
+  } catch (err) {
+    person.department = rollbackDept;
+    console.error(err);
+    window.alert(`Could not save department to the database: ${err?.message || String(err)}`);
+    renderStaff();
+    return;
+  }
+  addCustomDepartment(next);
+  renderCustomDepartmentsList();
+  refreshDepartmentDatalistAndFilters();
+  renderStaff();
+  renderBulkAttendanceRows();
+  renderDisabledStaffRows();
+  renderAdvanceStaffOptions();
+  renderAttendanceUpdateStaffOptions();
+  renderAttendanceHistory();
+  renderSalaryOverview();
+  renderWeeklyPaidSummary();
 }
 
 function getWeeklyRangeByDate(dateStr) {
@@ -640,22 +1105,25 @@ function getMonthlyRangeByDate(dateStr) {
 function renderAttendanceHistory() {
   const ref = attendanceRefDate.value || todayString();
   const mode = attendanceViewMode.value || "weekly";
+  const deptFilter = getDepartmentFilter(filterDeptRecords);
   const [startDate, endDate] = mode === "monthly" ? getMonthlyRangeByDate(ref) : getWeeklyRangeByDate(ref);
   const days = getDateRangeList(startDate, endDate);
-  const staffForRange = state.staff.filter((person) => {
+  let staffForRange = state.staff.filter((person) => {
     if (person.isActive !== false) return true;
     return state.attendance.some((entry) => entry.staffId === person.id && entry.date >= startDate && entry.date <= endDate);
   });
+  staffForRange = filterStaffByDepartment(staffForRange, deptFilter);
 
   attendanceTableHead.innerHTML = `
     <tr>
       <th>Staff</th>
+      <th>Dept</th>
       ${days.map((d) => `<th>${formatDateLabel(d)}</th>`).join("")}
     </tr>
   `;
 
   if (!staffForRange.length) {
-    attendanceTableBody.innerHTML = `<tr><td colspan="${1 + days.length}" class="empty">No attendance records yet.</td></tr>`;
+    attendanceTableBody.innerHTML = `<tr><td colspan="${2 + days.length}" class="empty">No attendance records yet.</td></tr>`;
     return;
   }
 
@@ -671,32 +1139,16 @@ function renderAttendanceHistory() {
     }).join("");
     return `
       <tr>
-        <td>${person.name}</td>
+        <td>${escapeHtml(person.name)}</td>
+        <td>${escapeHtml(normalizeDepartment(person))}</td>
         ${cells}
       </tr>
     `;
   }).join("");
 }
 
-function renderBulkAttendanceRows() {
-  const activeStaff = getActiveStaff();
-  if (!activeStaff.length) {
-    bulkAttendanceBody.innerHTML = '<tr><td colspan="7" class="empty">No active staff available. Add or enable staff.</td></tr>';
-    return;
-  }
-  bulkAttendanceBody.innerHTML = activeStaff.map((person) => `
-    <tr data-staff-row="${person.id}">
-      <td>${person.name}</td>
-      <td>${formatCurrency(person.salaryPerDay)}</td>
-      <td>
-        <button type="button" class="js-open-salary-editor-bulk" data-staff-id="${person.id}">Update</button>
-        <div class="js-bulk-salary-editor hidden" data-editor-for="${person.id}">
-          <input type="number" class="compact-input js-bulk-salary-input" data-staff-id="${person.id}" min="0" step="0.01" value="${person.salaryPerDay}">
-          <button type="button" class="js-save-salary-bulk" data-staff-id="${person.id}">Save</button>
-          <button type="button" class="js-cancel-salary-bulk" data-staff-id="${person.id}">Cancel</button>
-        </div>
-        <span class="update-msg hidden" data-msg-for-bulk="${person.id}">Updated</span>
-      </td>
+function bulkAttendanceRowHtml(person) {
+  const statusCells = `
       <td>
         <div class="status-group">
           <label class="status-option present-option"><input type="radio" name="status-${person.id}" value="Present" checked>Present</label>
@@ -709,24 +1161,95 @@ function renderBulkAttendanceRows() {
       </td>
       <td>
         <input type="number" class="compact-input js-extra-hours" data-staff-id="${person.id}" min="0" max="16" step="0.5" value="0">
+      </td>`;
+  if (!hasFullStaffAccess()) {
+    return `
+    <tr data-staff-row="${person.id}">
+      <td>${escapeHtml(person.name)}</td>
+      <td>${escapeHtml(normalizeDepartment(person))}</td>
+      <td>${formatCurrency(person.salaryPerDay)}</td>
+      ${statusCells}
+    </tr>`;
+  }
+  return `
+    <tr data-staff-row="${person.id}">
+      <td>${escapeHtml(person.name)}</td>
+      <td>${escapeHtml(normalizeDepartment(person))}</td>
+      <td>${formatCurrency(person.salaryPerDay)}</td>
+      <td>
+        <button type="button" class="js-open-salary-editor-bulk" data-staff-id="${person.id}">Update</button>
+        <div class="js-bulk-salary-editor hidden" data-editor-for="${person.id}">
+          <input type="number" class="compact-input js-bulk-salary-input" data-staff-id="${person.id}" min="0" step="0.01" value="${person.salaryPerDay}">
+          <button type="button" class="js-save-salary-bulk" data-staff-id="${person.id}">Save</button>
+          <button type="button" class="js-cancel-salary-bulk" data-staff-id="${person.id}">Cancel</button>
+        </div>
+        <span class="update-msg hidden" data-msg-for-bulk="${person.id}">Updated</span>
       </td>
+      ${statusCells}
       <td>
         <button type="button" class="js-disable-staff" data-staff-id="${person.id}">Disable</button>
       </td>
     </tr>
-  `).join("");
-  bulkAttendanceBody.querySelectorAll("tr").forEach((row) => updateStatusOptionStyles(row));
+  `;
+}
+
+function getBulkAttendanceStaffList() {
+  const deptFilter = getDepartmentFilter(filterDeptMark);
+  return filterStaffByDepartment(getActiveStaff(), deptFilter);
+}
+
+function setBulkAttendanceTableHeader() {
+  const row = bulkAttendanceForm?.querySelector("thead tr");
+  if (!row) return;
+  row.innerHTML = hasFullStaffAccess()
+    ? "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Update Salary</th><th>Status</th><th>Hours (if Partial)</th><th>Extra Hours</th><th>Action</th>"
+    : "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Status</th><th>Hours (if Partial)</th><th>Extra Hours</th>";
+}
+
+function renderBulkAttendanceRows() {
+  setBulkAttendanceTableHeader();
+  const bulkCols = hasFullStaffAccess() ? 8 : 6;
+  const list = getBulkAttendanceStaffList();
+  if (!list.length) {
+    bulkAttendanceBody.innerHTML = `<tr><td colspan="${bulkCols}" class="empty">No active staff available. Add or enable staff.</td></tr>`;
+    return;
+  }
+  const deptFilter = getDepartmentFilter(filterDeptMark);
+  let html = "";
+  if (!deptFilter) {
+    const byDept = {};
+    list.forEach((p) => {
+      const d = normalizeDepartment(p);
+      if (!byDept[d]) byDept[d] = [];
+      byDept[d].push(p);
+    });
+    Object.keys(byDept).sort((a, b) => a.localeCompare(b)).forEach((d) => {
+      html += `<tr class="dept-section-heading"><td colspan="${bulkCols}"><strong>${escapeHtml(d)}</strong></td></tr>`;
+      byDept[d].forEach((person) => {
+        html += bulkAttendanceRowHtml(person);
+      });
+    });
+  } else {
+    list.forEach((person) => {
+      html += bulkAttendanceRowHtml(person);
+    });
+  }
+  bulkAttendanceBody.innerHTML = html;
+  bulkAttendanceBody.querySelectorAll("tr[data-staff-row]").forEach((row) => updateStatusOptionStyles(row));
 }
 
 function renderDisabledStaffRows() {
-  const disabled = getDisabledStaff();
+  const deptFilter = getDepartmentFilter(filterDeptMark);
+  let disabled = getDisabledStaff();
+  disabled = filterStaffByDepartment(disabled, deptFilter);
   if (!disabled.length) {
-    disabledStaffBody.innerHTML = '<tr><td colspan="3" class="empty">No disabled staff.</td></tr>';
+    disabledStaffBody.innerHTML = '<tr><td colspan="4" class="empty">No disabled staff.</td></tr>';
     return;
   }
   disabledStaffBody.innerHTML = disabled.map((person) => `
     <tr>
-      <td>${person.name}</td>
+      <td>${escapeHtml(person.name)}</td>
+      <td>${escapeHtml(normalizeDepartment(person))}</td>
       <td>${formatCurrency(person.salaryPerDay)}</td>
       <td><button type="button" class="js-enable-staff" data-staff-id="${person.id}">Enable</button></td>
     </tr>
@@ -735,13 +1258,19 @@ function renderDisabledStaffRows() {
 
 function renderAdvanceStaffOptions() {
   if (!advanceStaffSelect) return;
-  const options = state.staff.map((person) => `<option value="${person.id}">${person.name}</option>`).join("");
+  const deptFilter = getDepartmentFilter(filterDeptAdvance);
+  let staffList = [...state.staff];
+  staffList = filterStaffByDepartment(staffList, deptFilter);
+  const options = staffList.map((person) => `<option value="${person.id}">${escapeHtml(person.name)} (${escapeHtml(normalizeDepartment(person))})</option>`).join("");
   advanceStaffSelect.innerHTML = options || "";
 }
 
 function renderAttendanceUpdateStaffOptions() {
   if (!attendanceUpdateStaff) return;
-  const options = state.staff.map((person) => `<option value="${person.id}">${person.name}</option>`).join("");
+  const deptFilter = getDepartmentFilter(filterDeptRecords);
+  let staffList = [...state.staff];
+  staffList = filterStaffByDepartment(staffList, deptFilter);
+  const options = staffList.map((person) => `<option value="${person.id}">${escapeHtml(person.name)} (${escapeHtml(normalizeDepartment(person))})</option>`).join("");
   attendanceUpdateStaff.innerHTML = options || "";
 }
 
@@ -763,14 +1292,16 @@ function loadAttendanceUpdateFormFromExisting() {
 
 function renderAdvanceBalance() {
   if (!advanceBalanceBody) return;
-  const activeStaff = getActiveStaff();
+  const deptFilter = getDepartmentFilter(filterDeptAdvance);
+  let activeStaff = getActiveStaff();
+  activeStaff = filterStaffByDepartment(activeStaff, deptFilter);
   if (!activeStaff.length) {
     advanceBalanceBody.innerHTML = '<tr><td colspan="2" class="empty">No records.</td></tr>';
     return;
   }
   advanceBalanceBody.innerHTML = activeStaff.map((person) => {
     const bal = getAdvanceSummary(person.id, "0001-01-01", "9999-12-31").outstanding;
-    return `<tr><td>${person.name}</td><td>${formatCurrency(bal)}</td></tr>`;
+    return `<tr><td>${escapeHtml(person.name)} <span class="hint">(${escapeHtml(normalizeDepartment(person))})</span></td><td>${formatCurrency(bal)}</td></tr>`;
   }).join("");
 }
 
@@ -805,10 +1336,12 @@ function renderWeeklyPaidSummary() {
     return;
   }
   const dateList = getDateRangeList(startDate, endDate);
-  const staffForRange = state.staff.filter((person) => {
+  const deptFilter = getDepartmentFilter(filterDeptWeeklyPaid);
+  let staffForRange = state.staff.filter((person) => {
     if (person.isActive !== false) return true;
     return state.attendance.some((a) => a.staffId === person.id && a.date >= startDate && a.date <= endDate);
   });
+  staffForRange = filterStaffByDepartment(staffForRange, deptFilter);
   if (!staffForRange.length) {
     weeklyPaidHead.innerHTML = "";
     weeklyPaidBody.innerHTML = '<tr><td colspan="6" class="empty">No data for selected range.</td></tr>';
@@ -819,6 +1352,7 @@ function renderWeeklyPaidSummary() {
     <tr>
       <th>Sr</th>
       <th>Name</th>
+      <th>Dept</th>
       <th>Daily Wage</th>
       ${dateList.map((d) => `<th>${formatDateLabel(d)}</th>`).join("")}
       <th>Total Days</th>
@@ -854,7 +1388,8 @@ function renderWeeklyPaidSummary() {
     return `
       <tr data-weekly-staff-row="${person.id}">
         <td>${idx + 1}</td>
-        <td>${person.name}</td>
+        <td>${escapeHtml(person.name)}</td>
+        <td>${escapeHtml(normalizeDepartment(person))}</td>
         <td>${formatCurrency(person.salaryPerDay)}</td>
         ${dayCells}
         <td>${totalDays}</td>
@@ -867,7 +1402,7 @@ function renderWeeklyPaidSummary() {
   weeklyPaidBody.innerHTML = `
     ${rows}
     <tr>
-      <td colspan="${3 + dateList.length + 1}"><strong>Total</strong></td>
+      <td colspan="${4 + dateList.length + 1}"><strong>Total</strong></td>
       <td><strong>${formatCurrency(totalPaid)}</strong></td>
       <td></td>
     </tr>
@@ -875,6 +1410,7 @@ function renderWeeklyPaidSummary() {
 }
 
 function renderWeeklyEditTable(staffId) {
+  if (!hasFullStaffAccess()) return;
   if (!currentWeeklySummaryRange?.startDate || !currentWeeklySummaryRange?.endDate) return;
   const staff = getStaffById(staffId);
   if (!staff) return;
@@ -919,6 +1455,10 @@ function setPage(pageName) {
     setAuthUI();
     return;
   }
+  if (isManagerUser() && !["home", "add-staff", "mark-attendance", "weekly-salary"].includes(pageName)) {
+    pageName = "home";
+  }
+  if (pageName !== "weekly-salary") closeSalaryPageAttendanceEditor();
   const pages = [homePage, addStaffPage, weeklySalaryPage, weeklyPaidPage, staffSalaryPage, advancePage, attendanceRecordsPage, attendancePage];
   if (isAdminUser()) pages.push(userManagementPage);
   pages.forEach((p) => p.classList.add("hidden"));
@@ -931,6 +1471,7 @@ function setPage(pageName) {
   if (pageName === "attendance-records") attendanceRecordsPage.classList.remove("hidden");
   if (pageName === "mark-attendance") attendancePage.classList.remove("hidden");
   if (pageName === "user-management" && isAdminUser()) userManagementPage.classList.remove("hidden");
+  refreshDepartmentDatalistAndFilters();
 }
 
 function flashUpdatedMessage(selector) {
@@ -975,16 +1516,53 @@ function isAdminUser() {
   return currentUser?.role === "admin";
 }
 
+/** Managers may add new staff and mark attendance only — no salary/department list edits or other modules. */
+function isManagerUser() {
+  return currentUser?.role === "manager";
+}
+
+/** Admin and User roles: can edit staff, departments, salary tools, advances, etc. */
+function hasFullStaffAccess() {
+  if (!currentUser) return false;
+  return !isManagerUser();
+}
+
+function updateRoleBasedUI() {
+  if (!currentUser) return;
+  const mgr = isManagerUser();
+  document.querySelectorAll("[data-requires-full-access]").forEach((el) => {
+    el.classList.toggle("hidden", mgr);
+  });
+  const deptCard = document.getElementById("department-management-card");
+  if (deptCard) deptCard.classList.toggle("hidden", mgr);
+  const disabledSection = document.getElementById("disabled-staff-section");
+  if (disabledSection) disabledSection.classList.toggle("hidden", mgr);
+  if (applySalaryDeductionsBtn) applySalaryDeductionsBtn.classList.toggle("hidden", mgr);
+  renderBulkAttendanceRows();
+  renderStaff();
+}
+
 function setAuthUI() {
   const loggedIn = !!currentUser;
   loginPage.classList.toggle("hidden", loggedIn);
   if (!loggedIn) {
-    const pages = [homePage, addStaffPage, weeklySalaryPage, staffSalaryPage, advancePage, attendanceRecordsPage, attendancePage, userManagementPage];
+    const pages = [
+      homePage,
+      addStaffPage,
+      weeklySalaryPage,
+      weeklyPaidPage,
+      staffSalaryPage,
+      advancePage,
+      attendanceRecordsPage,
+      attendancePage,
+      userManagementPage,
+    ];
     pages.forEach((p) => p.classList.add("hidden"));
   }
   if (openUserManagementPageBtn) {
     openUserManagementPageBtn.classList.toggle("hidden", !isAdminUser());
   }
+  if (loggedIn) updateRoleBasedUI();
 }
 
 function renderUsersTable() {
@@ -1008,38 +1586,67 @@ staffForm.addEventListener("submit", async (event) => {
   const name = staffNameInput.value.trim();
   let hindiName = staffNameHindiInput.value.trim();
   const salaryPerDay = Number(salaryPerDayInput.value);
+  const department = (staffDepartmentInput?.value || "").trim() || DEFAULT_DEPARTMENT;
   if (!name || salaryPerDay < 0) return;
   if (!hindiName) {
     hindiName = await transliterateToHindi(name);
   }
-  const person = { id: crypto.randomUUID(), name, hindiName, salaryPerDay };
+  const person = { id: crypto.randomUUID(), name, hindiName, salaryPerDay, department };
   await saveStaffRecord(person);
   state.staff.push(person);
+  if (hasFullStaffAccess()) addCustomDepartment(department);
+  refreshDepartmentDatalistAndFilters();
+  renderCustomDepartmentsList();
   renderStaff();
   renderBulkAttendanceRows();
+  renderDisabledStaffRows();
   renderAdvanceStaffOptions();
   renderAttendanceUpdateStaffOptions();
   renderAdvanceBalance();
   renderSalaryOverview();
+  renderWeeklyPaidSummary();
   staffForm.reset();
 });
 
+// Per-staff department is a &lt;select&gt; — use change (datalist inputs were unreliable for showing full lists).
+staffTableBody.addEventListener("change", (event) => {
+  if (!hasFullStaffAccess()) return;
+  const sel = event.target.closest(".js-staff-dept-input");
+  if (!sel || sel.tagName !== "SELECT") return;
+  void persistStaffDepartmentChange(sel);
+});
+
 staffTableBody.addEventListener("click", async (event) => {
+  if (!hasFullStaffAccess()) return;
   const btn = event.target.closest(".js-update-salary");
   if (!btn) return;
   const staffId = btn.dataset.staffId;
-  const input = staffTableBody.querySelector(`.js-salary-input[data-staff-id="${staffId}"]`);
-  if (!input) return;
-  const salaryPerDay = Number(input.value);
+  const salaryInput = staffTableBody.querySelector(`.js-salary-input[data-staff-id="${staffId}"]`);
+  const deptInput = staffTableBody.querySelector(`.js-staff-dept-input[data-staff-id="${staffId}"]`);
+  if (!salaryInput) return;
+  const salaryPerDay = Number(salaryInput.value);
   if (Number.isNaN(salaryPerDay) || salaryPerDay < 0) return;
   const person = getStaffById(staffId);
   if (!person) return;
+  if (deptInput) {
+    const dept = (deptInput.value || "").trim() || DEFAULT_DEPARTMENT;
+    person.department = dept;
+    addCustomDepartment(dept);
+  }
   person.salaryPerDay = salaryPerDay;
-  await saveStaffRecord(person);
+  try {
+    await saveStaffRecord(person);
+  } catch (err) {
+    console.error(err);
+    window.alert(`Could not save staff: ${err?.message || String(err)}`);
+    return;
+  }
   renderStaff();
   renderBulkAttendanceRows();
   renderAdvanceBalance();
   renderSalaryOverview();
+  refreshDepartmentDatalistAndFilters();
+  renderCustomDepartmentsList();
   flashUpdatedMessage(`.update-msg[data-msg-for="${staffId}"]`);
 });
 
@@ -1057,6 +1664,7 @@ bulkAttendanceBody.addEventListener("click", async (event) => {
   const openBtn = event.target.closest(".js-open-salary-editor-bulk");
   const cancelBtn = event.target.closest(".js-cancel-salary-bulk");
   const disableBtn = event.target.closest(".js-disable-staff");
+  if ((openBtn || cancelBtn || btn || disableBtn) && !hasFullStaffAccess()) return;
   if (openBtn) {
     const editor = bulkAttendanceBody.querySelector(`.js-bulk-salary-editor[data-editor-for="${openBtn.dataset.staffId}"]`);
     if (editor) editor.classList.remove("hidden");
@@ -1099,6 +1707,7 @@ bulkAttendanceBody.addEventListener("click", async (event) => {
 });
 
 disabledStaffBody.addEventListener("click", async (event) => {
+  if (!hasFullStaffAccess()) return;
   const btn = event.target.closest(".js-enable-staff");
   if (!btn) return;
   const staffId = btn.dataset.staffId;
@@ -1119,7 +1728,7 @@ bulkAttendanceForm.addEventListener("submit", async (event) => {
   const date = bulkAttendanceDate.value;
   if (!date) return;
   const tasks = [];
-  for (const person of getActiveStaff()) {
+  for (const person of getBulkAttendanceStaffList()) {
     const selected = bulkAttendanceBody.querySelector(`input[name="status-${person.id}"]:checked`);
     const status = selected ? selected.value : "Present";
     const hoursInput = bulkAttendanceBody.querySelector(`.js-partial-hours[data-staff-id="${person.id}"]`);
@@ -1151,7 +1760,62 @@ salaryForm.addEventListener("submit", (event) => {
   renderSalaryOverview();
 });
 
+if (salaryResult) {
+  salaryResult.addEventListener("click", (e) => {
+    const btn = e.target.closest(".js-salary-edit-attendance");
+    if (!btn?.dataset?.staffId) return;
+    openSalaryPageAttendanceEditor(btn.dataset.staffId);
+  });
+}
+
+if (salaryAttendanceEditorForm && salaryAttendanceEditorBody) {
+  salaryAttendanceEditorForm.addEventListener("change", (e) => {
+    const sel = e.target.closest(".js-salary-page-status");
+    if (!sel) return;
+    const tr = sel.closest("tr");
+    const partial = tr?.querySelector(".js-salary-page-partial");
+    if (partial) partial.disabled = sel.value !== "Partial";
+  });
+  salaryAttendanceEditorForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!salaryPageAttendanceEditStaffId) return;
+    const staffId = salaryPageAttendanceEditStaffId;
+    const rows = salaryAttendanceEditorBody.querySelectorAll("tr[data-salary-edit-date]");
+    const tasks = [];
+    rows.forEach((row) => {
+      const date = row.getAttribute("data-salary-edit-date");
+      if (!date) return;
+      const status = row.querySelector(".js-salary-page-status")?.value || "Absent";
+      let partial = Number(row.querySelector(".js-salary-page-partial")?.value || 0);
+      let extra = Number(row.querySelector(".js-salary-page-extra")?.value || 0);
+      partial = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, partial));
+      extra = Math.max(0, Math.min(16, extra));
+      const base = status === "Present" ? WORKING_HOURS_PER_DAY : status === "Absent" ? 0 : partial;
+      const record = {
+        id: `${staffId}_${date}`,
+        staffId,
+        date,
+        status,
+        hours: base + extra,
+        extraHours: extra,
+      };
+      tasks.push(saveAttendanceRecord(record));
+      upsertAttendanceInState(record);
+    });
+    await Promise.all(tasks);
+    closeSalaryPageAttendanceEditor();
+    renderAttendanceHistory();
+    renderSalaryOverview();
+    renderWeeklyPaidSummary();
+  });
+}
+
+if (salaryAttendanceEditorCancelBtn) {
+  salaryAttendanceEditorCancelBtn.addEventListener("click", () => closeSalaryPageAttendanceEditor());
+}
+
 applySalaryDeductionsBtn.addEventListener("click", async () => {
+  if (!hasFullStaffAccess()) return;
   const { endDate } = resolveSalaryRange();
   const inputs = salaryResult.querySelectorAll(".js-deduct-input");
   const tasks = [];
@@ -1182,8 +1846,16 @@ applySalaryDeductionsBtn.addEventListener("click", async () => {
 });
 
 downloadWeeklyPdfBtn.addEventListener("click", async () => {
+  if (!currentUser || (!hasFullStaffAccess() && !isManagerUser())) return;
   await exportWeeklyPdf();
 });
+
+if (downloadWeeklyCsvBtn) {
+  downloadWeeklyCsvBtn.addEventListener("click", async () => {
+    if (!currentUser || (!hasFullStaffAccess() && !isManagerUser())) return;
+    await exportWeeklySheetCsv();
+  });
+}
 
 goMarkAttendanceBtn.addEventListener("click", () => setPage("mark-attendance"));
 goDashboardBtn.addEventListener("click", () => setPage("home"));
@@ -1215,6 +1887,7 @@ attendanceUpdateDate.addEventListener("change", loadAttendanceUpdateFormFromExis
 attendanceUpdateStaff.addEventListener("change", loadAttendanceUpdateFormFromExisting);
 attendanceUpdateForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!hasFullStaffAccess()) return;
   const staffId = attendanceUpdateStaff.value;
   const date = attendanceUpdateDate.value;
   if (!staffId || !date) return;
@@ -1244,6 +1917,7 @@ weeklyPaidForm.addEventListener("submit", (event) => {
   renderWeeklyPaidSummary();
 });
 weeklyPaidBody.addEventListener("click", (event) => {
+  if (!hasFullStaffAccess()) return;
   const saveBtn = event.target.closest(".js-save-weekly-row");
   if (!saveBtn || !currentWeeklySummaryRange?.startDate || !currentWeeklySummaryRange?.endDate) return;
   const row = saveBtn.closest("tr[data-weekly-staff-row]");
@@ -1290,6 +1964,7 @@ weeklyPaidEditorCancelBtn.addEventListener("click", () => {
 });
 weeklyPaidEditorForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!hasFullStaffAccess()) return;
   if (!currentWeeklyEditStaffId) return;
   const rows = weeklyPaidEditorBody.querySelectorAll("tr[data-edit-date]");
   const tasks = [];
@@ -1322,6 +1997,7 @@ weeklyPaidEditorForm.addEventListener("submit", async (event) => {
 
 advanceForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!hasFullStaffAccess()) return;
   const staffId = advanceStaffSelect.value;
   const date = advanceDateInput.value;
   const type = advanceTypeSelect.value;
@@ -1392,20 +2068,127 @@ usersTableBody.addEventListener("click", async (event) => {
   renderUsersTable();
 });
 
+[
+  [filterDeptSalary, () => { renderSalaryOverview(); }],
+  [filterDeptWeeklyPaid, () => { renderWeeklyPaidSummary(); }],
+  [filterDeptRecords, () => { renderAttendanceHistory(); renderAttendanceUpdateStaffOptions(); }],
+  [filterDeptMark, () => { renderBulkAttendanceRows(); renderDisabledStaffRows(); }],
+  [filterDeptStaff, () => { renderStaff(); }],
+  [filterDeptAdvance, () => { renderAdvanceStaffOptions(); renderAdvanceBalance(); }],
+].forEach(([el, fn]) => {
+  if (el) el.addEventListener("change", fn);
+});
+
+function showDepartmentAddFeedback(result) {
+  const el = document.getElementById("department-add-feedback");
+  if (!el) return;
+  const messages = {
+    added: "Saved. The new department appears in all department filters and suggestions.",
+    duplicate: "That name is already in your list.",
+    empty: "Enter a department name first.",
+    default_name: `"${DEFAULT_DEPARTMENT}" is already the default — you can use it without adding it here.`,
+  };
+  if (result === "added" || result === "duplicate" || result === "empty" || result === "default_name") {
+    el.hidden = false;
+    el.textContent = messages[result];
+    window.clearTimeout(showDepartmentAddFeedback._t);
+    showDepartmentAddFeedback._t = window.setTimeout(() => {
+      el.hidden = true;
+      el.textContent = "";
+    }, 4000);
+  }
+}
+
+function commitNewDepartment() {
+  if (!hasFullStaffAccess()) return;
+  const input = document.getElementById("new-department-name");
+  const result = addCustomDepartment(input?.value || "");
+  if (input) input.value = "";
+  renderCustomDepartmentsList();
+  refreshDepartmentDatalistAndFilters();
+  window.requestAnimationFrame(() => refreshDepartmentDatalistAndFilters());
+  showDepartmentAddFeedback(result);
+}
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("#add-department-btn")) return;
+  event.preventDefault();
+  commitNewDepartment();
+});
+
+newDepartmentNameInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  commitNewDepartment();
+});
+
+customDepartmentsList?.addEventListener("click", (event) => {
+  const btn = event.target.closest(".js-remove-custom-dept");
+  if (!btn) return;
+  const name = decodeURIComponent(btn.dataset.dept || "");
+  removeCustomDepartment(name);
+  renderCustomDepartmentsList();
+  refreshDepartmentDatalistAndFilters();
+});
+
+function getColorTheme() {
+  return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+}
+
+function applyColorTheme(theme) {
+  if (theme === "light") {
+    document.documentElement.setAttribute("data-theme", "light");
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch (_e) {}
+  themeToggleButtons.forEach((btn) => {
+    btn.textContent = theme === "light" ? "Dark theme" : "Light theme";
+    btn.setAttribute(
+      "aria-label",
+      theme === "light" ? "Switch to dark theme" : "Switch to light theme",
+    );
+  });
+}
+
+function initThemeToggle() {
+  if (!themeToggleButtons.length) return;
+  applyColorTheme(getColorTheme());
+  themeToggleButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      applyColorTheme(getColorTheme() === "light" ? "dark" : "light");
+    });
+  });
+}
+
 async function init() {
   useCloudDb = !!window.AttendanceCloud?.isConfigured?.();
   renderDbStatus();
+  let cloudCustomDepartments = [];
   if (useCloudDb) {
     const cloudData = await window.AttendanceCloud.loadAll();
     state.staff = Array.isArray(cloudData?.staff) ? cloudData.staff : [];
     state.attendance = Array.isArray(cloudData?.attendance) ? cloudData.attendance : [];
     state.advances = Array.isArray(cloudData?.advances) ? cloudData.advances : [];
     state.users = Array.isArray(cloudData?.users) ? cloudData.users : [];
+    cloudCustomDepartments = Array.isArray(cloudData?.customDepartments) ? cloudData.customDepartments : [];
   } else {
     dbRef = await openDatabase();
     await loadState(dbRef);
     await migrateFromLocalStorage(dbRef);
   }
+  loadCustomDepartments();
+  if (useCloudDb) {
+    customDepartments = mergeDepartmentNameLists(customDepartments, cloudCustomDepartments);
+    persistCustomDepartmentsToLocal();
+  } else {
+    await mergeCustomDepartmentsFromIndexedDB();
+  }
+  await ensureStaffDepartments();
+  refreshDepartmentDatalistAndFilters();
+  renderCustomDepartmentsList();
   if (!state.users.some((u) => u.username === "admin")) {
     const adminUser = { id: "admin", username: "admin", password: "ankita00", role: "admin", isActive: true };
     await saveUserRecord(adminUser);
@@ -1444,4 +2227,5 @@ async function init() {
   if (currentUser) setPage("home");
 }
 
+initThemeToggle();
 init();

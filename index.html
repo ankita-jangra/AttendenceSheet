@@ -4,7 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Attendance & Salary Manager</title>
-  <link rel="stylesheet" href="styles.css">
+  <script>
+    try {
+      if (localStorage.getItem("attendance_theme") === "light") {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    } catch (_e) {}
+  </script>
+  <link rel="stylesheet" href="styles.css?v=20260417-5">
 </head>
 <body>
   <div class="background-blur"></div>
@@ -14,6 +21,7 @@
       <p>Track team attendance in one go and calculate latest weekly/monthly salary quickly.</p>
       <div id="db-status" class="db-status fallback">Fallback Mode (IndexedDB)</div>
       <div class="nav-actions">
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch color theme">Light theme</button>
         <button type="button" id="go-dashboard">Dashboard</button>
         <button type="button" id="go-mark-attendance">Mark Attendance</button>
         <button type="button" id="logout-btn">Logout</button>
@@ -22,7 +30,10 @@
 
     <section id="login-page" class="page">
       <section class="card">
-        <h2>Login</h2>
+        <div class="login-card-head">
+          <h2>Login</h2>
+          <button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch color theme">Light theme</button>
+        </div>
         <form id="login-form" class="grid-form">
           <label>
             Username
@@ -45,11 +56,11 @@
           <button type="button" id="open-add-staff-page">Add Staff</button>
           <button type="button" id="open-mark-attendance-page">Mark Attendance</button>
           <button type="button" id="open-weekly-salary-page">Weekly Salary</button>
-          <button type="button" id="open-weekly-paid-page">Weekly Paid Summary</button>
-          <button type="button" id="open-staff-salary-page">Staff Salary</button>
-          <button type="button" id="open-advance-page">Advance Management</button>
+          <button type="button" id="open-weekly-paid-page" data-requires-full-access>Weekly Paid Summary</button>
+          <button type="button" id="open-staff-salary-page" data-requires-full-access>Staff Salary</button>
+          <button type="button" id="open-advance-page" data-requires-full-access>Advance Management</button>
           <button type="button" id="open-user-management-page">User Management</button>
-          <button type="button" id="open-attendance-records-page">Attendance Records</button>
+          <button type="button" id="open-attendance-records-page" data-requires-full-access>Attendance Records</button>
         </div>
       </section>
     </section>
@@ -58,6 +69,10 @@
       <section class="card">
         <h2>Weekly Paid Summary</h2>
         <form id="weekly-paid-form" class="grid-form">
+          <label>
+            Department
+            <select id="filter-dept-weekly-paid"></select>
+          </label>
           <label>
             Start Date
             <input type="date" id="weekly-paid-start-date">
@@ -119,7 +134,8 @@
           <label>
             Role
             <select id="new-user-role">
-              <option value="user">User</option>
+              <option value="user">User (full access except user management)</option>
+              <option value="manager">Manager (add staff &amp; mark attendance only)</option>
               <option value="admin">Admin</option>
             </select>
           </label>
@@ -160,18 +176,41 @@
             <input type="text" id="staff-name-hindi" placeholder="e.g. इंदरपाल">
           </label>
           <label>
+            Department
+            <input type="text" id="staff-department" list="dept-datalist" placeholder="e.g. Operations" autocomplete="off">
+          </label>
+          <label>
             Salary Per Day
             <input type="number" id="salary-per-day" min="0" step="0.01" placeholder="e.g. 800" required>
           </label>
           <button type="submit">Add Staff</button>
         </form>
       </section>
+
+      <section class="card" id="department-management-card">
+        <h2>Your departments</h2>
+        <p class="hint">Define department names you use in this business. They appear in dropdowns and suggestions. You can also type any name when adding or editing staff.</p>
+        <div class="grid-form dept-manage-bar">
+          <label>
+            New department name
+            <input type="text" id="new-department-name" placeholder="e.g. Logistics" autocomplete="off">
+          </label>
+          <button type="button" id="add-department-btn">Add department</button>
+        </div>
+        <p id="department-add-feedback" class="hint" hidden role="status" aria-live="polite"></p>
+        <ul id="custom-departments-list" class="dept-manage-list"></ul>
+      </section>
     </section>
 
     <section id="weekly-salary-page" class="page hidden">
       <section class="card">
         <h2>Weekly Salary</h2>
+        <p class="hint">Use <strong>Start Date</strong> and <strong>End Date</strong> for any period — e.g. set them to the first and last day of a month, then <strong>Refresh Salary</strong> for a monthly report. If either date is cleared, the app uses the latest week (Sun–Sat). <strong>Download CSV (Excel)</strong> gives a file you can open in Excel with all columns; the PDF now uses real text so you can select and copy from it.</p>
         <form id="salary-form" class="grid-form">
+          <label>
+            Department
+            <select id="filter-dept-salary"></select>
+          </label>
           <label>
             Start Date
             <input type="date" id="salary-start-date">
@@ -183,8 +222,32 @@
           <button type="submit">Refresh Salary</button>
           <button type="button" id="apply-salary-deductions">Apply Deductions</button>
           <button type="button" id="download-weekly-pdf">Download Weekly PDF</button>
+          <button type="button" id="download-weekly-csv">Download CSV (Excel)</button>
         </form>
         <div id="salary-result" class="result hidden"></div>
+        <div id="salary-attendance-editor" class="result salary-attendance-editor hidden">
+          <h3 id="salary-attendance-editor-title">Edit attendance</h3>
+          <p id="salary-attendance-editor-hint" class="hint"></p>
+          <form id="salary-attendance-editor-form">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Status</th>
+                    <th>Partial hours</th>
+                    <th>Extra hours</th>
+                  </tr>
+                </thead>
+                <tbody id="salary-attendance-editor-body"></tbody>
+              </table>
+            </div>
+            <div class="bulk-top-bar salary-editor-actions">
+              <button type="submit">Save attendance</button>
+              <button type="button" id="salary-attendance-editor-cancel">Cancel</button>
+            </div>
+          </form>
+        </div>
       </section>
     </section>
 
@@ -192,6 +255,10 @@
       <section class="card">
         <h2>Advance Management</h2>
         <form id="advance-form" class="grid-form">
+          <label>
+            Department
+            <select id="filter-dept-advance"></select>
+          </label>
           <label>
             Staff
             <select id="advance-staff" required></select>
@@ -260,11 +327,18 @@
     <section id="staff-salary-page" class="page hidden">
       <section class="card">
         <h2>Staff List (Edit Salary)</h2>
+        <div class="grid-form">
+          <label>
+            Department
+            <select id="filter-dept-staff"></select>
+          </label>
+        </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Name</th>
+                <th>Department</th>
                 <th>Salary / Day</th>
                 <th>Salary / Hour (8h/day)</th>
                 <th>Action</th>
@@ -272,7 +346,7 @@
             </thead>
             <tbody id="staff-table-body">
               <tr>
-                <td colspan="4" class="empty">No staff added yet.</td>
+                <td colspan="5" class="empty">No staff added yet.</td>
               </tr>
             </tbody>
           </table>
@@ -284,6 +358,10 @@
       <section class="card">
         <h2>Attendance Records</h2>
         <form id="attendance-filter-form" class="grid-form">
+          <label>
+            Department
+            <select id="filter-dept-records"></select>
+          </label>
           <label>
             View
             <select id="attendance-view-mode">
@@ -303,7 +381,7 @@
             <thead id="attendance-table-head"></thead>
             <tbody id="attendance-table-body">
               <tr>
-                <td colspan="3" class="empty">No attendance records yet.</td>
+                <td colspan="4" class="empty">No attendance records yet.</td>
               </tr>
             </tbody>
           </table>
@@ -349,6 +427,10 @@
         <form id="bulk-attendance-form">
           <div class="bulk-top-bar">
             <label>
+              Department
+              <select id="filter-dept-mark"></select>
+            </label>
+            <label>
               Attendance Date
               <input type="date" id="bulk-attendance-date" required>
             </label>
@@ -360,6 +442,7 @@
               <thead>
                 <tr>
                   <th>Staff</th>
+                  <th>Dept</th>
                   <th>Salary / Day</th>
                   <th>Update Salary</th>
                   <th>Status</th>
@@ -370,7 +453,7 @@
               </thead>
               <tbody id="bulk-attendance-body">
                 <tr>
-                  <td colspan="7" class="empty">No active staff available. Add or enable staff.</td>
+                  <td colspan="8" class="empty">No active staff available. Add or enable staff.</td>
                 </tr>
               </tbody>
             </table>
@@ -378,20 +461,21 @@
         </form>
       </section>
 
-      <section class="card">
+      <section class="card" id="disabled-staff-section">
         <h2>Disabled Employees</h2>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Staff</th>
+                <th>Dept</th>
                 <th>Salary / Day</th>
                 <th>Action</th>
               </tr>
             </thead>
             <tbody id="disabled-staff-body">
               <tr>
-                <td colspan="3" class="empty">No disabled staff.</td>
+                <td colspan="4" class="empty">No disabled staff.</td>
               </tr>
             </tbody>
           </table>
@@ -400,12 +484,14 @@
     </section>
   </main>
 
+  <datalist id="dept-datalist"></datalist>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="config.js"></script>
-  <script src="supabase.js"></script>
-  <script src="script.js?v=20260404-5"></script>
+  <script src="supabase.js?v=20260414-5"></script>
+  <script src="script.js?v=20260417-8"></script>
 </body>
 </html>

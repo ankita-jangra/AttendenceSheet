@@ -12,6 +12,7 @@ create table if not exists public.staff (
 
 alter table public.staff add column if not exists hindi_name text not null default '';
 alter table public.staff add column if not exists is_active boolean not null default true;
+alter table public.staff add column if not exists department text not null default 'General';
 
 create table if not exists public.attendance (
   id text primary key,
@@ -47,6 +48,16 @@ create table if not exists public.app_users (
 insert into public.app_users (id, username, password, role, is_active)
 values ('admin', 'admin', 'ankita00', 'admin', true)
 on conflict (id) do update set username = excluded.username;
+
+-- Saved department names from "Your departments" (synced for all browsers using this app).
+create table if not exists public.app_settings (
+  key text primary key,
+  value jsonb not null default '[]'::jsonb
+);
+
+alter table public.app_settings enable row level security;
+drop policy if exists "public app_settings access" on public.app_settings;
+create policy "public app_settings access" on public.app_settings for all using (true) with check (true);
 
 -- If table already existed earlier, update status constraint for Partial support.
 do $$
