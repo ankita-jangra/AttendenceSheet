@@ -44,6 +44,8 @@ const attendanceTableBody = document.getElementById("attendance-table-body");
 const bulkAttendanceForm = document.getElementById("bulk-attendance-form");
 const bulkAttendanceDate = document.getElementById("bulk-attendance-date");
 const bulkAttendanceBody = document.getElementById("bulk-attendance-body");
+const bulkSaveAllBtn = document.getElementById("bulk-save-all-btn");
+const bulkAttendanceRefreshBtn = document.getElementById("bulk-attendance-refresh");
 const disabledStaffBody = document.getElementById("disabled-staff-body");
 const advanceForm = document.getElementById("advance-form");
 const advanceStaffSelect = document.getElementById("advance-staff");
@@ -130,26 +132,49 @@ let salaryPageAttendanceEditStaffId = null;
 let useCloudDb = false;
 let dbRef = null;
 let currentUser = null;
+/** User edited the bulk form after load; re-enables Save when the day was already complete. */
+let bulkMarkFormDirty = false;
+/** Live clock on dashboard while logged in. */
+let dashboardClockTimer = null;
 const hindiNameCache = {};
-let hindiFontLoaded = false;
+/** Cached TTF as base64; each new jsPDF() needs its own addFileToVFS + addFont. */
+let hindiFontTtfBase64 = null;
 
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  let binary = "";
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Register Noto Sans Devanagari on this doc so Devanagari shows in PDF (Helvetica cannot).
+ * Font bytes are fetched once and reused; registration runs per document instance.
+ */
 async function ensureHindiFont(doc) {
-  if (hindiFontLoaded) return true;
   try {
-    const fontUrl = "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Regular.ttf";
-    const response = await fetch(fontUrl);
-    if (!response.ok) return false;
-    const bytes = await response.arrayBuffer();
-    let binary = "";
-    const chunk = 0x8000;
-    const view = new Uint8Array(bytes);
-    for (let i = 0; i < view.length; i += chunk) {
-      binary += String.fromCharCode(...view.subarray(i, i + chunk));
+    const fileName = "NotoSansDevanagari-Regular.ttf";
+    if (!hindiFontTtfBase64) {
+      const fontUrls = [
+        "https://cdn.jsdelivr.net/gh/notofonts/noto-fonts@main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Regular.ttf",
+        "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Regular.ttf",
+      ];
+      let buf = null;
+      for (const fontUrl of fontUrls) {
+        const response = await fetch(fontUrl);
+        if (response.ok) {
+          buf = await response.arrayBuffer();
+          break;
+        }
+      }
+      if (!buf) return false;
+      hindiFontTtfBase64 = arrayBufferToBase64(buf);
     }
-    const base64 = btoa(binary);
-    doc.addFileToVFS("NotoSansDevanagari-Regular.ttf", base64);
-    doc.addFont("NotoSansDevanagari-Regular.ttf", "NotoSansDevanagari", "normal");
-    hindiFontLoaded = true;
+    doc.addFileToVFS(fileName, hindiFontTtfBase64);
+    doc.addFont(fileName, "NotoSansDevanagari", "normal");
     return true;
   } catch (_err) {
     return false;
@@ -289,34 +314,72 @@ function normalizeDepartment(personOrString) {
   return t || DEFAULT_DEPARTMENT;
 }
 
+/** @returns {{ name: string, attendanceOnly: boolean } | null} */
+function coerceDepartmentCatalogItem(raw) {
+  if (raw == null) return null;
+  if (typeof raw === "string") {
+    const name = raw.trim();
+    return name ? { name, attendanceOnly: false } : null;
+  }
+  if (typeof raw === "object" && raw.name != null) {
+    const name = String(raw.name).trim();
+    return name ? { name, attendanceOnly: !!raw.attendanceOnly } : null;
+  }
+  return null;
+}
+
+/** @param {unknown[]} arr */
+function normalizeDepartmentCatalog(arr) {
+  if (!Array.isArray(arr)) return [];
+  const byLower = new Map();
+  for (const raw of arr) {
+    const entry = coerceDepartmentCatalogItem(raw);
+    if (!entry) continue;
+    const low = entry.name.toLowerCase();
+    const prev = byLower.get(low);
+    if (!prev) {
+      byLower.set(low, { name: entry.name, attendanceOnly: !!entry.attendanceOnly });
+    } else {
+      byLower.set(low, {
+        name: prev.name,
+        attendanceOnly: prev.attendanceOnly || !!entry.attendanceOnly,
+      });
+    }
+  }
+  return [...byLower.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Merge local + remote department catalog; attendanceOnly is true if either side has it. */
+function mergeDepartmentCatalogs(localList, remoteList) {
+  return normalizeDepartmentCatalog([...(localList || []), ...(remoteList || [])]);
+}
+
+/** True when this department is marked "attendance only" in Your departments (no salary / advances). */
+function isAttendanceOnlyDepartment(personOrString) {
+  const dept = normalizeDepartment(personOrString);
+  const entry = customDepartments.find((d) => d.name.toLowerCase() === dept.toLowerCase());
+  return entry ? !!entry.attendanceOnly : false;
+}
+
+function updateAddStaffSalaryFieldVisibility() {
+  if (!staffDepartmentInput || !salaryPerDayInput) return;
+  const dept = (staffDepartmentInput.value || "").trim() || DEFAULT_DEPARTMENT;
+  const attendanceOnly = isAttendanceOnlyDepartment(dept);
+  const label = salaryPerDayInput.closest("label");
+  if (label) label.classList.toggle("hidden", attendanceOnly);
+  salaryPerDayInput.required = !attendanceOnly;
+  if (attendanceOnly) salaryPerDayInput.value = "0";
+}
+
 function loadCustomDepartments() {
   try {
     let raw = localStorage.getItem(CUSTOM_DEPTS_STORAGE_KEY);
     if (!raw) raw = sessionStorage.getItem(CUSTOM_DEPTS_STORAGE_KEY);
-    customDepartments = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(customDepartments)) customDepartments = [];
-    customDepartments = customDepartments.map((d) => String(d || "").trim()).filter(Boolean);
+    const parsed = raw ? JSON.parse(raw) : [];
+    customDepartments = normalizeDepartmentCatalog(Array.isArray(parsed) ? parsed : []);
   } catch (_err) {
     customDepartments = [];
   }
-}
-
-/** Union of two name lists, case-insensitive de-duplication, preserves first-seen casing. */
-function mergeDepartmentNameLists(localList, remoteList) {
-  const seen = new Set();
-  const out = [];
-  for (const list of [localList, remoteList]) {
-    if (!Array.isArray(list)) continue;
-    for (const d of list) {
-      const s = String(d || "").trim();
-      if (!s) continue;
-      const low = s.toLowerCase();
-      if (seen.has(low)) continue;
-      seen.add(low);
-      out.push(s);
-    }
-  }
-  return out.sort((a, b) => a.localeCompare(b));
 }
 
 async function mergeCustomDepartmentsFromIndexedDB() {
@@ -325,19 +388,19 @@ async function mergeCustomDepartmentsFromIndexedDB() {
     const row = await getSetting(dbRef, "custom_departments");
     const fromDb = Array.isArray(row?.value) ? row.value : [];
     if (!fromDb.length) return;
-    const seen = new Set(customDepartments.map((d) => d.toLowerCase()));
+    const seen = new Set(customDepartments.map((d) => d.name.toLowerCase()));
     let changed = false;
     for (const d of fromDb) {
-      const s = String(d || "").trim();
-      if (!s) continue;
-      const lower = s.toLowerCase();
+      const entry = coerceDepartmentCatalogItem(d);
+      if (!entry) continue;
+      const lower = entry.name.toLowerCase();
       if (seen.has(lower)) continue;
       seen.add(lower);
-      customDepartments.push(s);
+      customDepartments.push(entry);
       changed = true;
     }
     if (changed) {
-      customDepartments.sort((a, b) => a.localeCompare(b));
+      customDepartments.sort((a, b) => a.name.localeCompare(b.name));
       persistCustomDepartmentsToLocal();
       if (dbRef) {
         putOne(dbRef, SETTINGS_STORE, { key: "custom_departments", value: [...customDepartments] }).catch(() => {});
@@ -378,37 +441,69 @@ function addCustomDepartment(raw) {
   const name = (raw || "").trim();
   if (!name) return "empty";
   if (name.toLowerCase() === DEFAULT_DEPARTMENT.toLowerCase()) return "default_name";
-  if (customDepartments.some((d) => d.toLowerCase() === name.toLowerCase())) return "duplicate";
-  customDepartments.push(name);
-  customDepartments.sort((a, b) => a.localeCompare(b));
+  if (customDepartments.some((d) => d.name.toLowerCase() === name.toLowerCase())) return "duplicate";
+  customDepartments.push({ name, attendanceOnly: false });
+  customDepartments.sort((a, b) => a.name.localeCompare(b.name));
   saveCustomDepartments();
   return "added";
 }
 
 function removeCustomDepartment(name) {
-  customDepartments = customDepartments.filter((d) => d !== name);
+  customDepartments = customDepartments.filter((d) => d.name !== name);
   saveCustomDepartments();
 }
 
+function setDepartmentAttendanceOnly(deptName, attendanceOnly) {
+  if (!hasFullStaffAccess()) return;
+  const i = customDepartments.findIndex((d) => d.name.toLowerCase() === deptName.toLowerCase());
+  if (i < 0) return;
+  customDepartments[i] = { ...customDepartments[i], attendanceOnly: !!attendanceOnly };
+  customDepartments.sort((a, b) => a.name.localeCompare(b.name));
+  saveCustomDepartments();
+  if (attendanceOnly) {
+    for (const p of state.staff) {
+      if (normalizeDepartment(p).toLowerCase() !== deptName.toLowerCase()) continue;
+      if (Number(p.salaryPerDay) === 0) continue;
+      p.salaryPerDay = 0;
+      saveStaffRecord(p).catch(() => {});
+    }
+  }
+  refreshDepartmentDatalistAndFilters();
+  renderCustomDepartmentsList();
+  renderStaff();
+  renderBulkAttendanceRows();
+  renderAdvanceStaffOptions();
+  renderAdvanceBalance();
+  renderSalaryOverview();
+  renderWeeklyPaidSummary();
+  updateAddStaffSalaryFieldVisibility();
+}
+
 function collectAllDepartmentNames() {
-  const set = new Set([DEFAULT_DEPARTMENT, ...customDepartments]);
+  const set = new Set([DEFAULT_DEPARTMENT, ...customDepartments.map((d) => d.name)]);
   state.staff.forEach((s) => set.add(normalizeDepartment(s)));
   return [...set].sort((a, b) => a.localeCompare(b));
 }
 
 function renderCustomDepartmentsList() {
   if (!customDepartmentsList) return;
-  const names = [...customDepartments].sort((a, b) => a.localeCompare(b));
-  if (!names.length) {
+  const entries = [...customDepartments].sort((a, b) => a.name.localeCompare(b.name));
+  if (!entries.length) {
     customDepartmentsList.innerHTML = "<li class=\"hint\">No saved department names yet. Add one above, or assign a department when adding or editing staff.</li>";
     return;
   }
-  customDepartmentsList.innerHTML = names.map((n) => {
+  customDepartmentsList.innerHTML = entries.map((e) => {
+    const n = e.name;
     const inUse = state.staff.some((s) => normalizeDepartment(s) === n);
     const enc = encodeURIComponent(n);
+    const checked = e.attendanceOnly ? " checked" : "";
     return `
-      <li>
-        <span>${escapeHtml(n)}</span>
+      <li class="dept-manage-item">
+        <span class="dept-manage-name">${escapeHtml(n)}</span>
+        <label class="dept-attendance-only-label">
+          <input type="checkbox" class="js-dept-attendance-only" data-dept="${enc}"${checked}>
+          Attendance only (no salary)
+        </label>
         ${inUse ? "<span class=\"hint\">(assigned to staff)</span>" : `<button type="button" class="js-remove-custom-dept" data-dept="${enc}">Remove</button>`}
       </li>
     `;
@@ -440,6 +535,69 @@ function fillDepartmentFilterSelect(selectEl) {
     selectEl.appendChild(opt);
   });
   if (prev && [...selectEl.options].some((o) => o.value === prev)) selectEl.value = prev;
+}
+
+/** Mark Attendance: no "All departments" — user must pick one before editing. */
+function fillMarkAttendanceDepartmentSelect() {
+  if (!filterDeptMark) return;
+  const prev = filterDeptMark.value;
+  const names = collectAllDepartmentNames();
+  clearDomNode(filterDeptMark);
+  const optPlaceholder = document.createElement("option");
+  optPlaceholder.value = "";
+  optPlaceholder.textContent = "— Select department —";
+  filterDeptMark.appendChild(optPlaceholder);
+  names.forEach((n) => {
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = n;
+    filterDeptMark.appendChild(opt);
+  });
+  if (prev && [...filterDeptMark.options].some((o) => o.value === prev)) filterDeptMark.value = prev;
+}
+
+function isMarkAttendanceDepartmentSelected() {
+  return !!(filterDeptMark?.value && String(filterDeptMark.value).trim());
+}
+
+/** Weekly Salary: require a department before dates, refresh, or exports. */
+function fillWeeklySalaryDepartmentSelect() {
+  if (!filterDeptSalary) return;
+  const prev = filterDeptSalary.value;
+  const names = collectAllDepartmentNames();
+  clearDomNode(filterDeptSalary);
+  const optPlaceholder = document.createElement("option");
+  optPlaceholder.value = "";
+  optPlaceholder.textContent = "— Select department —";
+  filterDeptSalary.appendChild(optPlaceholder);
+  names.forEach((n) => {
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = n;
+    filterDeptSalary.appendChild(opt);
+  });
+  if (prev && [...filterDeptSalary.options].some((o) => o.value === prev)) filterDeptSalary.value = prev;
+}
+
+function isWeeklySalaryDepartmentSelected() {
+  return !!(filterDeptSalary?.value && String(filterDeptSalary.value).trim());
+}
+
+function updateWeeklySalaryDeptGate() {
+  const ok = isWeeklySalaryDepartmentSelected();
+  if (salaryStartDateInput) salaryStartDateInput.disabled = !ok;
+  if (salaryEndDateInput) salaryEndDateInput.disabled = !ok;
+  const salarySubmitBtn = salaryForm?.querySelector('button[type="submit"]');
+  if (salarySubmitBtn) salarySubmitBtn.disabled = !ok;
+  if (downloadWeeklyPdfBtn) downloadWeeklyPdfBtn.disabled = !ok;
+  if (downloadWeeklyCsvBtn) downloadWeeklyCsvBtn.disabled = !ok;
+  if (applySalaryDeductionsBtn) applySalaryDeductionsBtn.disabled = !ok;
+}
+
+function updateMarkAttendanceDeptGate() {
+  const ok = isMarkAttendanceDepartmentSelected();
+  if (bulkAttendanceDate) bulkAttendanceDate.disabled = !ok;
+  if (bulkAttendanceRefreshBtn) bulkAttendanceRefreshBtn.disabled = !ok;
 }
 
 /** Options for per-staff department &lt;select&gt; (full list, not datalist). */
@@ -475,7 +633,13 @@ function refreshDepartmentDatalistAndFilters() {
       });
     }
     DEPARTMENT_FILTER_IDS.forEach((id) => {
-      fillDepartmentFilterSelect(document.getElementById(id));
+      if (id === "filter-dept-mark") {
+        fillMarkAttendanceDepartmentSelect();
+      } else if (id === "filter-dept-salary") {
+        fillWeeklySalaryDepartmentSelect();
+      } else {
+        fillDepartmentFilterSelect(document.getElementById(id));
+      }
     });
   } catch (_err) {
     /* ignore */
@@ -564,17 +728,35 @@ async function transliterateToHindi(name) {
   const key = (name || "").trim().toLowerCase();
   if (!key) return "";
   if (hindiNameCache[key]) return hindiNameCache[key];
+  const hasDevanagari = (s) => typeof s === "string" && /[\u0900-\u097F]/.test(s);
+
   try {
     const url = `https://inputtools.google.com/request?text=${encodeURIComponent(name)}&itc=hi-t-i0-und&num=1`;
     const res = await fetch(url);
     const data = await res.json();
     if (Array.isArray(data) && data[0] === "SUCCESS" && data[1]?.[0]?.[1]?.[0]) {
       const value = data[1][0][1][0];
-      hindiNameCache[key] = value;
-      return value;
+      if (value) {
+        hindiNameCache[key] = value;
+        return value;
+      }
     }
   } catch (_err) {
-    // Ignore transliteration failures and fallback.
+    /* Google Input Tools often blocked by CORS or network — try fallback */
+  }
+
+  try {
+    const res = await fetch(
+      `https://api.mymemory.translated.net/get?q=${encodeURIComponent(name)}&langpair=en|hi`,
+    );
+    const data = await res.json();
+    const t = data?.responseData?.translatedText;
+    if (typeof t === "string" && hasDevanagari(t)) {
+      hindiNameCache[key] = t;
+      return t;
+    }
+  } catch (_err) {
+    /* ignore */
   }
   return "";
 }
@@ -597,7 +779,7 @@ function getWeekDays(startDate, endDate) {
 }
 
 function calculateSalaryForStaff(staff, startDate, endDate) {
-  const hourlySalary = staff.salaryPerDay / WORKING_HOURS_PER_DAY;
+  const hourlySalary = isAttendanceOnlyDepartment(staff) ? 0 : Number(staff.salaryPerDay) / WORKING_HOURS_PER_DAY;
   const records = state.attendance.filter((entry) => entry.staffId === staff.id && entry.date >= startDate && entry.date <= endDate);
   let presentDays = 0;
   let absentDays = 0;
@@ -661,6 +843,7 @@ function getDateRangeList(startDate, endDate) {
 }
 
 function getDailySalaryValue(staff, dateIso) {
+  if (isAttendanceOnlyDepartment(staff)) return 0;
   const row = state.attendance.find((entry) => entry.staffId === staff.id && entry.date === dateIso);
   if (!row) return 0;
   const hourly = Number(staff.salaryPerDay) / WORKING_HOURS_PER_DAY;
@@ -676,6 +859,10 @@ function closeSalaryPageAttendanceEditor() {
 
 function openSalaryPageAttendanceEditor(staffId) {
   if (!salaryAttendanceEditor || !salaryAttendanceEditorBody) return;
+  if (!isWeeklySalaryDepartmentSelected()) {
+    window.alert("Select a department first.");
+    return;
+  }
   const { startDate, endDate } = resolveSalaryRange();
   if (!startDate || !endDate || startDate > endDate) {
     window.alert("Set a valid start and end date first, then Refresh Salary.");
@@ -732,6 +919,18 @@ function openSalaryTableFullscreen() {
 }
 
 function renderSalaryOverview() {
+  updateWeeklySalaryDeptGate();
+  if (!isWeeklySalaryDepartmentSelected()) {
+    closeSalaryTableFullscreen();
+    closeSalaryPageAttendanceEditor();
+    currentSalaryRows = [];
+    if (salaryResult) {
+      salaryResult.classList.remove("hidden");
+      if (salaryFullscreenBar) salaryFullscreenBar.classList.add("hidden");
+      salaryResult.innerHTML = `<p class="empty">Select a department above to load the salary report.</p>`;
+    }
+    return;
+  }
   const { periodLabel, startDate, endDate } = resolveSalaryRange();
   const deptFilter = getDepartmentFilter(filterDeptSalary);
   let activeStaff = getActiveStaff();
@@ -760,25 +959,29 @@ function renderSalaryOverview() {
   const deductionReadOnly = isManagerUser();
   const rows = currentSalaryRows.map((row) => {
     const { person, s, adv, suggestedDeduction, payment, nextAdvance } = row;
-    const deductCell = deductionReadOnly
-      ? `<td>${formatCurrency(suggestedDeduction)}</td>`
-      : `<td><input type="number" class="compact-input js-deduct-input" data-staff-id="${person.id}" min="0" step="0.01" value="${suggestedDeduction.toFixed(2)}"></td>`;
+    const attOnly = isAttendanceOnlyDepartment(person);
+    const money = (v) => (attOnly ? "—" : formatCurrency(v));
+    const deductCell = attOnly
+      ? "<td>—</td>"
+      : deductionReadOnly
+        ? `<td>${formatCurrency(suggestedDeduction)}</td>`
+        : `<td><input type="number" class="compact-input js-deduct-input" data-staff-id="${person.id}" min="0" step="0.01" value="${suggestedDeduction.toFixed(2)}"></td>`;
     return `
       <tr>
         <td>${escapeHtml(person.name)}</td>
         <td>${escapeHtml(normalizeDepartment(person))}</td>
-        <td>${formatCurrency(person.salaryPerDay)}</td>
+        <td>${money(person.salaryPerDay)}</td>
         <td>${s.presentDays}</td>
         <td>${s.partialDays}</td>
         <td>${s.partialHours}</td>
         <td>${s.extraHours}</td>
         <td>${s.absentDays}</td>
         <td>${s.totalHours}</td>
-        <td>${formatCurrency(adv.previous)}</td>
-        <td>${formatCurrency(adv.takenInRange)}</td>
+        <td>${money(adv.previous)}</td>
+        <td>${money(adv.takenInRange)}</td>
         ${deductCell}
-        <td>${formatCurrency(payment)}</td>
-        <td>${formatCurrency(nextAdvance)}</td>
+        <td>${money(payment)}</td>
+        <td>${money(nextAdvance)}</td>
         <td><button type="button" class="js-salary-edit-attendance" data-staff-id="${person.id}">Update attendance</button></td>
       </tr>
     `;
@@ -798,14 +1001,16 @@ function renderSalaryOverview() {
   const dateHead = dateList.map((d) => `<th>${d}</th>`).join("");
   const dateRows = currentSalaryRows.map((row) => {
     const { person } = row;
+    const attOnly = isAttendanceOnlyDepartment(person);
     const perDayValues = dateList.map((d) => getDailySalaryValue(person, d));
     const total = perDayValues.reduce((sum, val) => sum + val, 0);
+    const cellMoney = (v) => (attOnly ? "—" : formatCurrency(v));
     return `
       <tr>
         <td>${escapeHtml(person.name)}</td>
         <td>${escapeHtml(normalizeDepartment(person))}</td>
-        ${perDayValues.map((v) => `<td>${formatCurrency(v)}</td>`).join("")}
-        <td><strong>${formatCurrency(total)}</strong></td>
+        ${perDayValues.map((v) => `<td>${cellMoney(v)}</td>`).join("")}
+        <td><strong>${attOnly ? "—" : formatCurrency(total)}</strong></td>
       </tr>
     `;
   }).join("");
@@ -894,6 +1099,7 @@ function escapeCsvField(val) {
 /** Shared rows for PDF (real text, selectable) and CSV (Excel paste). */
 async function buildWeeklySheetExportPayload() {
   if (!currentUser || (!hasFullStaffAccess() && !isManagerUser())) return null;
+  if (!isWeeklySalaryDepartmentSelected()) return null;
   const deptFilter = getDepartmentFilter(filterDeptSalary);
   let activeStaff = getActiveStaff();
   activeStaff = filterStaffByDepartment(activeStaff, deptFilter);
@@ -1007,19 +1213,37 @@ async function exportWeeklyPdf() {
   const titleLines = doc.splitTextToSize(data.title, doc.internal.pageSize.getWidth() - 40);
   doc.text(titleLines, 24, 28);
   const startY = 28 + titleLines.length * 12 + 4;
+  const hiOk = await ensureHindiFont(doc);
+  /** Noto Sans Devanagari has no Latin glyphs — using it for the whole table hid headers (English) and day markers (P/A). Helvetica for table; Noto only on column index 2 (Name Hi). */
+  const columnStyles = hiOk ? { 2: { font: "NotoSansDevanagari", fontStyle: "normal" } } : {};
   doc.autoTable({
     head: [data.headRow],
     body: data.bodyRows,
     startY,
-    styles: { fontSize: 9, cellPadding: 2, valign: "middle", overflow: "linebreak" },
-    headStyles: { fillColor: [15, 118, 110], textColor: 255, fontStyle: "bold", fontSize: 9 },
-    bodyStyles: { fontSize: 9 },
+    styles: {
+      font: "helvetica",
+      fontStyle: "normal",
+      fontSize: 9,
+      cellPadding: 2,
+      valign: "middle",
+      overflow: "linebreak",
+    },
+    headStyles: {
+      font: "helvetica",
+      fontStyle: "bold",
+      fillColor: [15, 118, 110],
+      textColor: 255,
+      fontSize: 9,
+    },
+    bodyStyles: { font: "helvetica", fontStyle: "normal", fontSize: 9 },
+    columnStyles,
     theme: "grid",
     margin: { left: 20, right: 20 },
     tableWidth: "auto",
     showHead: "everyPage",
   });
   const fy = doc.lastAutoTable?.finalY ?? startY;
+  doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
   doc.text(`Total payment (all staff): ${data.grandTotal}`, 24, fy + 14);
   doc.save(`attendance-week-${data.startDate}-to-${data.endDate}.pdf`);
@@ -1042,16 +1266,32 @@ function renderStaff() {
   }
   const readonly = !hasFullStaffAccess();
   staffTableBody.innerHTML = list.map((person) => {
-    const hourly = person.salaryPerDay / WORKING_HOURS_PER_DAY;
     const dept = normalizeDepartment(person);
+    const attOnly = isAttendanceOnlyDepartment(person);
+    const hourly = attOnly ? 0 : person.salaryPerDay / WORKING_HOURS_PER_DAY;
     if (readonly) {
       return `
       <tr>
         <td>${escapeHtml(person.name)}</td>
         <td>${escapeHtml(dept)}</td>
-        <td>${formatCurrency(person.salaryPerDay)}</td>
-        <td>${formatCurrency(hourly)}</td>
+        <td>${attOnly ? "—" : formatCurrency(person.salaryPerDay)}</td>
+        <td>${attOnly ? "—" : formatCurrency(hourly)}</td>
       </tr>`;
+    }
+    if (attOnly) {
+      return `
+      <tr>
+        <td>${escapeHtml(person.name)}</td>
+        <td>
+          <select class="compact-input dept-input-wide js-staff-dept-input" data-staff-id="${person.id}" data-prev-dept="${encodeURIComponent(dept)}" title="Choose department" aria-label="Department for ${escapeHtml(person.name)}">
+            ${buildDepartmentSelectOptionsHtml(dept)}
+          </select>
+        </td>
+        <td>—</td>
+        <td>—</td>
+        <td><span class="hint">Attendance only (no salary)</span></td>
+      </tr>
+    `;
     }
     return `
       <tr>
@@ -1093,6 +1333,9 @@ async function persistStaffDepartmentChange(input) {
   if (next.toLowerCase() === prev.toLowerCase()) return;
   const rollbackDept = person.department;
   person.department = next;
+  if (isAttendanceOnlyDepartment(person)) {
+    person.salaryPerDay = 0;
+  }
   try {
     await saveStaffRecord(person);
   } catch (err) {
@@ -1113,6 +1356,7 @@ async function persistStaffDepartmentChange(input) {
   renderAttendanceHistory();
   renderSalaryOverview();
   renderWeeklyPaidSummary();
+  renderAdvanceBalance();
 }
 
 function getWeeklyRangeByDate(dateStr) {
@@ -1177,45 +1421,101 @@ function renderAttendanceHistory() {
   }).join("");
 }
 
-function bulkAttendanceRowHtml(person) {
+function getBulkRowAttendanceState(person, dateStr) {
+  const ex = state.attendance.find((a) => a.staffId === person.id && a.date === dateStr);
+  if (!ex) {
+    return { status: "Present", partialHours: 4, extraHours: 0 };
+  }
+  const extraH = Math.max(0, Math.min(16, Number(ex.extraHours) || 0));
+  const st = ex.status === "Absent" ? "Absent" : ex.status === "Partial" ? "Partial" : "Present";
+  let partialH = 4;
+  if (st === "Partial") {
+    partialH = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, Number(ex.hours || 0) - extraH));
+  }
+  return { status: st, partialHours: partialH, extraHours: extraH };
+}
+
+/** Every visible staff row has a saved attendance row for this date (same filter as Save). */
+function isBulkDateFullyRecordedForCurrentList(dateStr) {
+  if (!dateStr) return false;
+  const list = getBulkAttendanceStaffList();
+  if (!list.length) return false;
+  return list.every((person) => state.attendance.some((a) => a.staffId === person.id && a.date === dateStr));
+}
+
+function updateBulkSaveButtonState() {
+  if (!bulkSaveAllBtn || !bulkAttendanceDate?.value) return;
+  if (!isMarkAttendanceDepartmentSelected()) {
+    bulkSaveAllBtn.disabled = true;
+    bulkSaveAllBtn.title = "Select a department first.";
+    return;
+  }
+  const list = getBulkAttendanceStaffList();
+  if (!list.length) {
+    bulkSaveAllBtn.disabled = true;
+    bulkSaveAllBtn.title = "";
+    return;
+  }
+  const dateStr = bulkAttendanceDate.value;
+  const complete = isBulkDateFullyRecordedForCurrentList(dateStr);
+  bulkSaveAllBtn.disabled = complete && !bulkMarkFormDirty;
+  bulkSaveAllBtn.title = complete && !bulkMarkFormDirty
+    ? "Everyone listed already has attendance for this date. Change a value to save again, or pick another date."
+    : "";
+}
+
+async function refreshBulkAttendanceData() {
+  if (!isMarkAttendanceDepartmentSelected()) return;
+  try {
+    if (useCloudDb && typeof window.AttendanceCloud?.loadAll === "function") {
+      const data = await window.AttendanceCloud.loadAll();
+      if (data?.attendance) state.attendance = data.attendance;
+    } else if (dbRef) {
+      const rows = await readAll(dbRef, ATTENDANCE_STORE);
+      state.attendance = Array.isArray(rows) ? rows : [];
+    }
+  } catch (err) {
+    console.error(err);
+    window.alert(`Could not refresh attendance: ${err?.message || String(err)}`);
+    return;
+  }
+  bulkMarkFormDirty = false;
+  renderBulkAttendanceRows();
+}
+
+function bulkAttendanceRowHtml(person, dateStr) {
+  const attOnly = isAttendanceOnlyDepartment(person);
+  const { status, partialHours, extraHours } = getBulkRowAttendanceState(person, dateStr);
+  const presentChk = status === "Present" ? " checked" : "";
+  const absentChk = status === "Absent" ? " checked" : "";
+  const partialChk = status === "Partial" ? " checked" : "";
+  const partialDisabled = status === "Partial" ? "" : " disabled";
+  const salaryCell = attOnly ? "<td>—</td>" : `<td>${formatCurrency(person.salaryPerDay)}</td>`;
   const statusCells = `
       <td>
         <div class="status-group">
-          <label class="status-option present-option"><input type="radio" name="status-${person.id}" value="Present" checked>Present</label>
-          <label class="status-option absent-option"><input type="radio" name="status-${person.id}" value="Absent">Absent</label>
-          <label class="status-option partial-option"><input type="radio" name="status-${person.id}" value="Partial">Partial</label>
+          <label class="status-option present-option"><input type="radio" name="status-${person.id}" value="Present"${presentChk}>Present</label>
+          <label class="status-option absent-option"><input type="radio" name="status-${person.id}" value="Absent"${absentChk}>Absent</label>
+          <label class="status-option partial-option"><input type="radio" name="status-${person.id}" value="Partial"${partialChk}>Partial</label>
         </div>
       </td>
       <td>
-        <input type="number" class="compact-input js-partial-hours" data-staff-id="${person.id}" min="0" max="24" step="0.5" value="4" disabled>
+        <input type="number" class="compact-input js-partial-hours" data-staff-id="${person.id}" min="0" max="24" step="0.5" value="${partialHours}"${partialDisabled}>
       </td>
       <td>
-        <input type="number" class="compact-input js-extra-hours" data-staff-id="${person.id}" min="0" max="16" step="0.5" value="0">
+        <input type="number" class="compact-input js-extra-hours" data-staff-id="${person.id}" min="0" max="16" step="0.5" value="${extraHours}">
       </td>`;
-  if (!hasFullStaffAccess()) {
-    return `
+  const rowCore = `
     <tr data-staff-row="${person.id}">
       <td>${escapeHtml(person.name)}</td>
       <td>${escapeHtml(normalizeDepartment(person))}</td>
-      <td>${formatCurrency(person.salaryPerDay)}</td>
-      ${statusCells}
+      ${salaryCell}
+      ${statusCells}`;
+  if (!hasFullStaffAccess()) {
+    return `${rowCore}
     </tr>`;
   }
-  return `
-    <tr data-staff-row="${person.id}">
-      <td>${escapeHtml(person.name)}</td>
-      <td>${escapeHtml(normalizeDepartment(person))}</td>
-      <td>${formatCurrency(person.salaryPerDay)}</td>
-      <td>
-        <button type="button" class="js-open-salary-editor-bulk" data-staff-id="${person.id}">Update</button>
-        <div class="js-bulk-salary-editor hidden" data-editor-for="${person.id}">
-          <input type="number" class="compact-input js-bulk-salary-input" data-staff-id="${person.id}" min="0" step="0.01" value="${person.salaryPerDay}">
-          <button type="button" class="js-save-salary-bulk" data-staff-id="${person.id}">Save</button>
-          <button type="button" class="js-cancel-salary-bulk" data-staff-id="${person.id}">Cancel</button>
-        </div>
-        <span class="update-msg hidden" data-msg-for-bulk="${person.id}">Updated</span>
-      </td>
-      ${statusCells}
+  return `${rowCore}
       <td>
         <button type="button" class="js-disable-staff" data-staff-id="${person.id}">Disable</button>
       </td>
@@ -1224,6 +1524,7 @@ function bulkAttendanceRowHtml(person) {
 }
 
 function getBulkAttendanceStaffList() {
+  if (!isMarkAttendanceDepartmentSelected()) return [];
   const deptFilter = getDepartmentFilter(filterDeptMark);
   return filterStaffByDepartment(getActiveStaff(), deptFilter);
 }
@@ -1232,16 +1533,24 @@ function setBulkAttendanceTableHeader() {
   const row = bulkAttendanceForm?.querySelector("thead tr");
   if (!row) return;
   row.innerHTML = hasFullStaffAccess()
-    ? "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Update Salary</th><th>Status</th><th>Hours (if Partial)</th><th>Extra Hours</th><th>Action</th>"
+    ? "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Status</th><th>Hours (if Partial)</th><th>Extra Hours</th><th>Action</th>"
     : "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Status</th><th>Hours (if Partial)</th><th>Extra Hours</th>";
 }
 
 function renderBulkAttendanceRows() {
   setBulkAttendanceTableHeader();
-  const bulkCols = hasFullStaffAccess() ? 8 : 6;
+  const bulkCols = hasFullStaffAccess() ? 7 : 6;
+  updateMarkAttendanceDeptGate();
+  if (!isMarkAttendanceDepartmentSelected()) {
+    bulkAttendanceBody.innerHTML = `<tr><td colspan="${bulkCols}" class="empty">Select a department above to load staff and mark attendance.</td></tr>`;
+    updateBulkSaveButtonState();
+    return;
+  }
   const list = getBulkAttendanceStaffList();
+  const dateStr = (bulkAttendanceDate?.value || todayString()).trim();
   if (!list.length) {
-    bulkAttendanceBody.innerHTML = `<tr><td colspan="${bulkCols}" class="empty">No active staff available. Add or enable staff.</td></tr>`;
+    bulkAttendanceBody.innerHTML = `<tr><td colspan="${bulkCols}" class="empty">No active staff in this department. Add or enable staff.</td></tr>`;
+    updateBulkSaveButtonState();
     return;
   }
   const deptFilter = getDepartmentFilter(filterDeptMark);
@@ -1256,19 +1565,24 @@ function renderBulkAttendanceRows() {
     Object.keys(byDept).sort((a, b) => a.localeCompare(b)).forEach((d) => {
       html += `<tr class="dept-section-heading"><td colspan="${bulkCols}"><strong>${escapeHtml(d)}</strong></td></tr>`;
       byDept[d].forEach((person) => {
-        html += bulkAttendanceRowHtml(person);
+        html += bulkAttendanceRowHtml(person, dateStr);
       });
     });
   } else {
     list.forEach((person) => {
-      html += bulkAttendanceRowHtml(person);
+      html += bulkAttendanceRowHtml(person, dateStr);
     });
   }
   bulkAttendanceBody.innerHTML = html;
   bulkAttendanceBody.querySelectorAll("tr[data-staff-row]").forEach((row) => updateStatusOptionStyles(row));
+  updateBulkSaveButtonState();
 }
 
 function renderDisabledStaffRows() {
+  if (!isMarkAttendanceDepartmentSelected()) {
+    disabledStaffBody.innerHTML = '<tr><td colspan="4" class="empty">Select a department to see disabled staff.</td></tr>';
+    return;
+  }
   const deptFilter = getDepartmentFilter(filterDeptMark);
   let disabled = getDisabledStaff();
   disabled = filterStaffByDepartment(disabled, deptFilter);
@@ -1276,20 +1590,23 @@ function renderDisabledStaffRows() {
     disabledStaffBody.innerHTML = '<tr><td colspan="4" class="empty">No disabled staff.</td></tr>';
     return;
   }
-  disabledStaffBody.innerHTML = disabled.map((person) => `
+  disabledStaffBody.innerHTML = disabled.map((person) => {
+    const attOnly = isAttendanceOnlyDepartment(person);
+    return `
     <tr>
       <td>${escapeHtml(person.name)}</td>
       <td>${escapeHtml(normalizeDepartment(person))}</td>
-      <td>${formatCurrency(person.salaryPerDay)}</td>
+      <td>${attOnly ? "—" : formatCurrency(person.salaryPerDay)}</td>
       <td><button type="button" class="js-enable-staff" data-staff-id="${person.id}">Enable</button></td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function renderAdvanceStaffOptions() {
   if (!advanceStaffSelect) return;
   const deptFilter = getDepartmentFilter(filterDeptAdvance);
-  let staffList = [...state.staff];
+  let staffList = [...state.staff].filter((p) => !isAttendanceOnlyDepartment(p));
   staffList = filterStaffByDepartment(staffList, deptFilter);
   const options = staffList.map((person) => `<option value="${person.id}">${escapeHtml(person.name)} (${escapeHtml(normalizeDepartment(person))})</option>`).join("");
   advanceStaffSelect.innerHTML = options || "";
@@ -1323,7 +1640,7 @@ function loadAttendanceUpdateFormFromExisting() {
 function renderAdvanceBalance() {
   if (!advanceBalanceBody) return;
   const deptFilter = getDepartmentFilter(filterDeptAdvance);
-  let activeStaff = getActiveStaff();
+  let activeStaff = getActiveStaff().filter((p) => !isAttendanceOnlyDepartment(p));
   activeStaff = filterStaffByDepartment(activeStaff, deptFilter);
   if (!activeStaff.length) {
     advanceBalanceBody.innerHTML = '<tr><td colspan="2" class="empty">No records.</td></tr>';
@@ -1394,7 +1711,8 @@ function renderWeeklyPaidSummary() {
   let totalPaid = 0;
   const rows = staffForRange.map((person, idx) => {
     const s = calculateSalaryForStaff(person, startDate, endDate);
-    totalPaid += s.payable;
+    const attOnly = isAttendanceOnlyDepartment(person);
+    if (!attOnly) totalPaid += s.payable;
     const totalDays = (s.totalHours / WORKING_HOURS_PER_DAY).toFixed(2).replace(/\.00$/, "");
     const dayCells = dateList.map((date) => {
       const entry = state.attendance.find((a) => a.staffId === person.id && a.date === date);
@@ -1420,10 +1738,10 @@ function renderWeeklyPaidSummary() {
         <td>${idx + 1}</td>
         <td>${escapeHtml(person.name)}</td>
         <td>${escapeHtml(normalizeDepartment(person))}</td>
-        <td>${formatCurrency(person.salaryPerDay)}</td>
+        <td>${attOnly ? "—" : formatCurrency(person.salaryPerDay)}</td>
         ${dayCells}
         <td>${totalDays}</td>
-        <td>${formatCurrency(s.payable)}</td>
+        <td>${attOnly ? "—" : formatCurrency(s.payable)}</td>
         <td><button type="button" class="js-save-weekly-row" data-staff-id="${person.id}">Save</button></td>
       </tr>
     `;
@@ -1502,10 +1820,20 @@ function setPage(pageName) {
   if (pageName === "staff-salary") staffSalaryPage.classList.remove("hidden");
   if (pageName === "advance") advancePage.classList.remove("hidden");
   if (pageName === "attendance-records") attendanceRecordsPage.classList.remove("hidden");
-  if (pageName === "mark-attendance") attendancePage.classList.remove("hidden");
+  if (pageName === "mark-attendance") {
+    attendancePage.classList.remove("hidden");
+    bulkMarkFormDirty = false;
+  }
   if (pageName === "info") infoPage.classList.remove("hidden");
   if (pageName === "user-management" && isAdminUser()) userManagementPage.classList.remove("hidden");
   refreshDepartmentDatalistAndFilters();
+  if (pageName === "mark-attendance") {
+    renderBulkAttendanceRows();
+    renderDisabledStaffRows();
+  }
+  if (pageName === "weekly-salary") {
+    renderSalaryOverview();
+  }
 }
 
 function flashUpdatedMessage(selector) {
@@ -1576,10 +1904,56 @@ function updateRoleBasedUI() {
   renderStaff();
 }
 
+function renderDashboardWelcome() {
+  const wrap = document.getElementById("dashboard-welcome");
+  const userLine = document.getElementById("dashboard-user-line");
+  const dtLine = document.getElementById("dashboard-datetime");
+  if (!wrap || !userLine || !dtLine) return;
+  if (!currentUser) {
+    wrap.hidden = true;
+    userLine.textContent = "";
+    dtLine.textContent = "";
+    return;
+  }
+  wrap.hidden = false;
+  const role = currentUser.role || "user";
+  userLine.textContent = `Signed in as ${currentUser.username} (${role})`;
+}
+
+function updateDashboardDateTime() {
+  const dtLine = document.getElementById("dashboard-datetime");
+  if (!dtLine || !currentUser) return;
+  const now = new Date();
+  dtLine.textContent = now.toLocaleString(undefined, {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function startDashboardClock() {
+  stopDashboardClock();
+  updateDashboardDateTime();
+  dashboardClockTimer = window.setInterval(updateDashboardDateTime, 1000);
+}
+
+function stopDashboardClock() {
+  if (dashboardClockTimer != null) {
+    window.clearInterval(dashboardClockTimer);
+    dashboardClockTimer = null;
+  }
+}
+
 function setAuthUI() {
   const loggedIn = !!currentUser;
   loginPage.classList.toggle("hidden", loggedIn);
   if (!loggedIn) {
+    stopDashboardClock();
+    renderDashboardWelcome();
     closeSalaryTableFullscreen();
     const pages = [
       homePage,
@@ -1598,7 +1972,11 @@ function setAuthUI() {
   if (openUserManagementPageBtn) {
     openUserManagementPageBtn.classList.toggle("hidden", !isAdminUser());
   }
-  if (loggedIn) updateRoleBasedUI();
+  if (loggedIn) {
+    renderDashboardWelcome();
+    startDashboardClock();
+    updateRoleBasedUI();
+  }
 }
 
 function renderUsersTable() {
@@ -1621,9 +1999,11 @@ staffForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const name = staffNameInput.value.trim();
   let hindiName = staffNameHindiInput.value.trim();
-  const salaryPerDay = Number(salaryPerDayInput.value);
   const department = (staffDepartmentInput?.value || "").trim() || DEFAULT_DEPARTMENT;
-  if (!name || salaryPerDay < 0) return;
+  const attOnlyDept = isAttendanceOnlyDepartment(department);
+  const salaryPerDay = attOnlyDept ? 0 : Number(salaryPerDayInput.value);
+  if (!name) return;
+  if (!attOnlyDept && (Number.isNaN(salaryPerDay) || salaryPerDay < 0)) return;
   if (!hindiName) {
     hindiName = await transliterateToHindi(name);
   }
@@ -1642,6 +2022,7 @@ staffForm.addEventListener("submit", async (event) => {
   renderSalaryOverview();
   renderWeeklyPaidSummary();
   staffForm.reset();
+  updateAddStaffSalaryFieldVisibility();
 });
 
 // Per-staff department is a &lt;select&gt; — use change (datalist inputs were unreliable for showing full lists).
@@ -1688,58 +2069,36 @@ staffTableBody.addEventListener("click", async (event) => {
 
 bulkAttendanceBody.addEventListener("change", (event) => {
   const radio = event.target;
-  if (!radio.matches("input[type='radio']")) return;
-  const row = radio.closest("tr");
-  updateStatusOptionStyles(row);
-  const partialInput = row.querySelector(".js-partial-hours");
-  partialInput.disabled = radio.value !== "Partial";
+  if (radio.matches("input[type='radio']")) {
+    const row = radio.closest("tr");
+    updateStatusOptionStyles(row);
+    const partialInput = row.querySelector(".js-partial-hours");
+    partialInput.disabled = radio.value !== "Partial";
+  }
+  bulkMarkFormDirty = true;
+  updateBulkSaveButtonState();
+});
+
+bulkAttendanceBody.addEventListener("input", () => {
+  bulkMarkFormDirty = true;
+  updateBulkSaveButtonState();
 });
 
 bulkAttendanceBody.addEventListener("click", async (event) => {
-  const btn = event.target.closest(".js-save-salary-bulk");
-  const openBtn = event.target.closest(".js-open-salary-editor-bulk");
-  const cancelBtn = event.target.closest(".js-cancel-salary-bulk");
   const disableBtn = event.target.closest(".js-disable-staff");
-  if ((openBtn || cancelBtn || btn || disableBtn) && !hasFullStaffAccess()) return;
-  if (openBtn) {
-    const editor = bulkAttendanceBody.querySelector(`.js-bulk-salary-editor[data-editor-for="${openBtn.dataset.staffId}"]`);
-    if (editor) editor.classList.remove("hidden");
-    return;
-  }
-  if (cancelBtn) {
-    const editor = bulkAttendanceBody.querySelector(`.js-bulk-salary-editor[data-editor-for="${cancelBtn.dataset.staffId}"]`);
-    if (editor) editor.classList.add("hidden");
-    return;
-  }
-  if (disableBtn) {
-    const staffId = disableBtn.dataset.staffId;
-    const person = getStaffById(staffId);
-    if (!person) return;
-    person.isActive = false;
-    await saveStaffRecord(person);
-    renderStaff();
-    renderBulkAttendanceRows();
-    renderDisabledStaffRows();
-    renderAdvanceStaffOptions();
-    renderAdvanceBalance();
-    renderSalaryOverview();
-    return;
-  }
-  if (!btn) return;
-  const staffId = btn.dataset.staffId;
-  const input = bulkAttendanceBody.querySelector(`.js-bulk-salary-input[data-staff-id="${staffId}"]`);
-  if (!input) return;
-  const salaryPerDay = Number(input.value);
-  if (Number.isNaN(salaryPerDay) || salaryPerDay < 0) return;
+  if (!disableBtn) return;
+  if (!hasFullStaffAccess()) return;
+  const staffId = disableBtn.dataset.staffId;
   const person = getStaffById(staffId);
   if (!person) return;
-  person.salaryPerDay = salaryPerDay;
+  person.isActive = false;
   await saveStaffRecord(person);
   renderStaff();
   renderBulkAttendanceRows();
+  renderDisabledStaffRows();
+  renderAdvanceStaffOptions();
   renderAdvanceBalance();
   renderSalaryOverview();
-  flashUpdatedMessage(`.update-msg[data-msg-for-bulk="${staffId}"]`);
 });
 
 disabledStaffBody.addEventListener("click", async (event) => {
@@ -1761,8 +2120,15 @@ disabledStaffBody.addEventListener("click", async (event) => {
 
 bulkAttendanceForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!isMarkAttendanceDepartmentSelected()) {
+    window.alert("Please select a department first.");
+    return;
+  }
   const date = bulkAttendanceDate.value;
   if (!date) return;
+  if (bulkSaveAllBtn?.disabled) return;
+  const confirmMsg = `Save attendance for all ${getBulkAttendanceStaffList().length} staff shown for ${date}?\n\nPress OK to save, or Cancel to go back without saving.`;
+  if (!window.confirm(confirmMsg)) return;
   const tasks = [];
   for (const person of getBulkAttendanceStaffList()) {
     const selected = bulkAttendanceBody.querySelector(`input[name="status-${person.id}"]:checked`);
@@ -1783,13 +2149,18 @@ bulkAttendanceForm.addEventListener("submit", async (event) => {
     upsertAttendanceInState(record);
   }
   await Promise.all(tasks);
+  bulkMarkFormDirty = false;
+  renderBulkAttendanceRows();
   renderAttendanceHistory();
   renderSalaryOverview();
-  setPage("home");
 });
 
 salaryForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (!isWeeklySalaryDepartmentSelected()) {
+    window.alert("Please select a department first.");
+    return;
+  }
   if (salaryStartDateInput.value && salaryEndDateInput.value && salaryStartDateInput.value > salaryEndDateInput.value) {
     return;
   }
@@ -1879,6 +2250,15 @@ applySalaryDeductionsBtn.addEventListener("click", async () => {
     renderAdvanceBalance();
     renderAdvanceHistory();
   }
+});
+
+bulkAttendanceDate?.addEventListener("change", () => {
+  bulkMarkFormDirty = false;
+  renderBulkAttendanceRows();
+});
+
+bulkAttendanceRefreshBtn?.addEventListener("click", () => {
+  void refreshBulkAttendanceData();
 });
 
 downloadWeeklyPdfBtn.addEventListener("click", async () => {
@@ -2126,7 +2506,11 @@ usersTableBody.addEventListener("click", async (event) => {
   [filterDeptSalary, () => { renderSalaryOverview(); }],
   [filterDeptWeeklyPaid, () => { renderWeeklyPaidSummary(); }],
   [filterDeptRecords, () => { renderAttendanceHistory(); renderAttendanceUpdateStaffOptions(); }],
-  [filterDeptMark, () => { renderBulkAttendanceRows(); renderDisabledStaffRows(); }],
+  [filterDeptMark, () => {
+    bulkMarkFormDirty = false;
+    renderBulkAttendanceRows();
+    renderDisabledStaffRows();
+  }],
   [filterDeptStaff, () => { renderStaff(); }],
   [filterDeptAdvance, () => { renderAdvanceStaffOptions(); renderAdvanceBalance(); }],
 ].forEach(([el, fn]) => {
@@ -2185,6 +2569,17 @@ customDepartmentsList?.addEventListener("click", (event) => {
   refreshDepartmentDatalistAndFilters();
 });
 
+customDepartmentsList?.addEventListener("change", (event) => {
+  const cb = event.target.closest(".js-dept-attendance-only");
+  if (!cb || !hasFullStaffAccess()) return;
+  const name = decodeURIComponent(cb.dataset.dept || "");
+  if (!name) return;
+  setDepartmentAttendanceOnly(name, cb.checked);
+});
+
+staffDepartmentInput?.addEventListener("input", updateAddStaffSalaryFieldVisibility);
+staffDepartmentInput?.addEventListener("change", updateAddStaffSalaryFieldVisibility);
+
 function getColorTheme() {
   return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
 }
@@ -2235,7 +2630,7 @@ async function init() {
   }
   loadCustomDepartments();
   if (useCloudDb) {
-    customDepartments = mergeDepartmentNameLists(customDepartments, cloudCustomDepartments);
+    customDepartments = mergeDepartmentCatalogs(customDepartments, cloudCustomDepartments);
     persistCustomDepartmentsToLocal();
   } else {
     await mergeCustomDepartmentsFromIndexedDB();
@@ -2277,6 +2672,7 @@ async function init() {
   renderAttendanceHistory();
   renderSalaryOverview();
   renderWeeklyPaidSummary();
+  updateAddStaffSalaryFieldVisibility();
   setAuthUI();
   if (currentUser) setPage("home");
 }

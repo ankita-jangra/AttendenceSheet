@@ -11,7 +11,7 @@
       }
     } catch (_e) {}
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260417-8">
+  <link rel="stylesheet" href="styles.css?v=20260417-10">
 </head>
 <body>
   <div class="background-blur"></div>
@@ -52,6 +52,10 @@
 
     <section id="home-page" class="page hidden">
       <section class="card">
+        <div class="dashboard-welcome" id="dashboard-welcome" hidden>
+          <p class="dashboard-user-line" id="dashboard-user-line"></p>
+          <p class="dashboard-datetime" id="dashboard-datetime" aria-live="polite"></p>
+        </div>
         <h2>Quick Actions</h2>
         <div class="nav-actions">
           <button type="button" id="open-add-staff-page">Add Staff</button>
@@ -224,7 +228,7 @@
 
       <section class="card" id="department-management-card">
         <h2>Your departments</h2>
-        <p class="hint">Define department names you use in this business. They appear in dropdowns and suggestions. You can also type any name when adding or editing staff.</p>
+        <p class="hint">Define department names you use in this business. They appear in dropdowns and suggestions. You can also type any name when adding or editing staff. For departments where you only track attendance (no wages), turn on <strong>Attendance only (no salary)</strong> — salary fields are hidden, pay columns show &quot;—&quot;, and those staff are omitted from advance management.</p>
         <div class="grid-form dept-manage-bar">
           <label>
             New department name
@@ -240,7 +244,7 @@
     <section id="weekly-salary-page" class="page hidden">
       <section class="card">
         <h2>Weekly Salary</h2>
-        <p class="hint">Use <strong>Start Date</strong> and <strong>End Date</strong> for any period — e.g. set them to the first and last day of a month, then <strong>Refresh Salary</strong> for a monthly report. If either date is cleared, the app uses the latest week (Sun–Sat). <strong>Download CSV (Excel)</strong> gives a file you can open in Excel with all columns; the PDF now uses real text so you can select and copy from it. After data loads, use <strong>Full screen preview</strong> to view wide tables using the full window.</p>
+        <p class="hint"><strong>Department</strong> is required first — then set dates and use <strong>Refresh Salary</strong>. Use <strong>Start Date</strong> and <strong>End Date</strong> for any period — e.g. set them to the first and last day of a month for a monthly report. If either date is cleared, the app uses the latest week (Sun–Sat). <strong>Download CSV (Excel)</strong> gives a file you can open in Excel with all columns; the PDF uses real text so you can select and copy from it. After data loads, use <strong>Full screen preview</strong> to view wide tables using the full window.</p>
         <form id="salary-form" class="grid-form">
           <label>
             Department
@@ -476,9 +480,10 @@
               Attendance Date
               <input type="date" id="bulk-attendance-date" required>
             </label>
-            <button type="submit">Save All Attendance</button>
+            <button type="button" id="bulk-attendance-refresh">Refresh</button>
+            <button type="submit" id="bulk-save-all-btn">Save All Attendance</button>
           </div>
-          <p class="hint">Partial means custom base hours. Add extra time separately. Present base is 8 hours, Absent base is 0.</p>
+          <p class="hint"><strong>Department</strong> is required first — then pick a date and mark attendance. Partial means custom base hours. Add extra time separately. Present base is 8 hours, Absent base is 0. <strong>Salary / Day</strong> is read-only here — edit wages on <strong>Staff Salary</strong> or when adding staff. Use <strong>Refresh</strong> to reload saved marks. After everyone is saved for that date, <strong>Save All Attendance</strong> stays off until you change attendance or pick another day.</p>
           <div class="table-wrap">
             <table>
               <thead>
@@ -486,7 +491,6 @@
                   <th>Staff</th>
                   <th>Dept</th>
                   <th>Salary / Day</th>
-                  <th>Update Salary</th>
                   <th>Status</th>
                   <th>Hours (if Partial)</th>
                   <th>Extra Hours</th>
@@ -495,7 +499,7 @@
               </thead>
               <tbody id="bulk-attendance-body">
                 <tr>
-                  <td colspan="8" class="empty">No active staff available. Add or enable staff.</td>
+                  <td colspan="7" class="empty">No active staff available. Add or enable staff.</td>
                 </tr>
               </tbody>
             </table>
@@ -541,7 +545,7 @@
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="config.js"></script>
-  <script src="supabase.js?v=20260414-5"></script>
-  <script src="script.js?v=20260417-12"></script>
+  <script src="supabase.js?v=20260417-1"></script>
+  <script src="script.js?v=20260417-21"></script>
 </body>
 </html>

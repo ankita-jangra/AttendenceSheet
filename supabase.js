@@ -21,11 +21,19 @@
     if (row == null) return [];
     const v = row.value;
     if (v == null || v === undefined) return [];
-    if (Array.isArray(v)) return v.map((x) => String(x || "").trim()).filter(Boolean);
+    function coerceEntry(x) {
+      if (x && typeof x === "object" && x.name != null) {
+        const name = String(x.name).trim();
+        return name ? { name, attendanceOnly: !!x.attendanceOnly } : null;
+      }
+      const s = String(x ?? "").trim();
+      return s ? { name: s, attendanceOnly: false } : null;
+    }
+    if (Array.isArray(v)) return v.map(coerceEntry).filter(Boolean);
     if (typeof v === "string") {
       try {
         const parsed = JSON.parse(v);
-        return Array.isArray(parsed) ? parsed.map((x) => String(x || "").trim()).filter(Boolean) : [];
+        return Array.isArray(parsed) ? parsed.map(coerceEntry).filter(Boolean) : [];
       } catch (_e) {
         return [];
       }
@@ -86,7 +94,19 @@
 
   async function saveCustomDepartments(names) {
     if (!client) return;
-    const list = Array.isArray(names) ? names.map((n) => String(n || "").trim()).filter(Boolean) : [];
+    let list = [];
+    if (Array.isArray(names)) {
+      list = names
+        .map((n) => {
+          if (n && typeof n === "object" && n.name != null) {
+            const name = String(n.name).trim();
+            return name ? { name, attendanceOnly: !!n.attendanceOnly } : null;
+          }
+          const s = String(n ?? "").trim();
+          return s ? { name: s, attendanceOnly: false } : null;
+        })
+        .filter(Boolean);
+    }
     const { error } = await client.from("app_settings").upsert({ key: "custom_departments", value: list }, { onConflict: "key" });
     if (error) throw error;
   }
