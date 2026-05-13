@@ -1803,7 +1803,7 @@ function setPage(pageName) {
     setAuthUI();
     return;
   }
-  if (isManagerUser() && !["home", "add-staff", "mark-attendance", "weekly-salary", "attendance-records", "info", "user-management"].includes(pageName)) {
+  if (isManagerUser() && !["home", "add-staff", "mark-attendance", "weekly-salary", "attendance-records", "info"].includes(pageName)) {
     pageName = "home";
   }
   if (pageName !== "weekly-salary") {
@@ -1811,7 +1811,7 @@ function setPage(pageName) {
     closeSalaryTableFullscreen();
   }
   const pages = [homePage, addStaffPage, weeklySalaryPage, weeklyPaidPage, staffSalaryPage, advancePage, attendanceRecordsPage, attendancePage, infoPage];
-  if (isAdminUser() || isManagerUser()) pages.push(userManagementPage);
+  if (isAdminUser()) pages.push(userManagementPage);
   pages.forEach((p) => p.classList.add("hidden"));
   if (pageName === "home") homePage.classList.remove("hidden");
   if (pageName === "add-staff") addStaffPage.classList.remove("hidden");
@@ -1825,10 +1825,7 @@ function setPage(pageName) {
     bulkMarkFormDirty = false;
   }
   if (pageName === "info") infoPage.classList.remove("hidden");
-  if (pageName === "user-management" && (isAdminUser() || isManagerUser())) {
-    userManagementPage.classList.remove("hidden");
-    renderUsersTable();
-  }
+  if (pageName === "user-management" && isAdminUser()) userManagementPage.classList.remove("hidden");
   refreshDepartmentDatalistAndFilters();
   if (pageName === "mark-attendance") {
     renderBulkAttendanceRows();
@@ -1881,7 +1878,7 @@ function isAdminUser() {
   return currentUser?.role === "admin";
 }
 
-/** Managers may add staff, mark attendance, weekly salary view, attendance records, and enable/disable User-role app logins — no salary/staff edits, department list, advances, or creating users. */
+/** Managers may add staff, mark attendance, weekly salary view, and attendance records — no salary/staff edits, department list, advances, etc. */
 function isManagerUser() {
   return currentUser?.role === "manager";
 }
@@ -1890,26 +1887,6 @@ function isManagerUser() {
 function hasFullStaffAccess() {
   if (!currentUser) return false;
   return !isManagerUser();
-}
-
-/** Managers may only enable/disable standard User-role logins (not admins, managers, or themselves). */
-function canManagerToggleUserAccount(u) {
-  if (!u || !isManagerUser()) return false;
-  const r = u.role || "user";
-  if (u.username === "admin" || r === "admin" || r === "manager") return false;
-  if (currentUser?.id && u.id === currentUser.id) return false;
-  return r === "user";
-}
-
-function userAccountToggleCellHtml(u) {
-  if (u.username === "admin") return "-";
-  if (isAdminUser()) {
-    return `<button type="button" class="js-toggle-user" data-user-id="${u.id}">${u.isActive !== false ? "Disable" : "Enable"}</button>`;
-  }
-  if (canManagerToggleUserAccount(u)) {
-    return `<button type="button" class="js-toggle-user" data-user-id="${u.id}">${u.isActive !== false ? "Disable" : "Enable"}</button>`;
-  }
-  return "-";
 }
 
 function updateRoleBasedUI() {
@@ -1923,8 +1900,6 @@ function updateRoleBasedUI() {
   const disabledSection = document.getElementById("disabled-staff-section");
   if (disabledSection) disabledSection.classList.toggle("hidden", mgr);
   if (applySalaryDeductionsBtn) applySalaryDeductionsBtn.classList.toggle("hidden", mgr);
-  const userCreateCard = document.getElementById("user-management-create-card");
-  if (userCreateCard) userCreateCard.classList.toggle("hidden", mgr);
   renderBulkAttendanceRows();
   renderStaff();
 }
@@ -1995,7 +1970,7 @@ function setAuthUI() {
     pages.forEach((p) => p.classList.add("hidden"));
   }
   if (openUserManagementPageBtn) {
-    openUserManagementPageBtn.classList.toggle("hidden", !(isAdminUser() || isManagerUser()));
+    openUserManagementPageBtn.classList.toggle("hidden", !isAdminUser());
   }
   if (loggedIn) {
     renderDashboardWelcome();
@@ -2015,7 +1990,7 @@ function renderUsersTable() {
       <td>${u.username}</td>
       <td>${u.role}</td>
       <td>${u.isActive !== false ? "Active" : "Disabled"}</td>
-      <td>${userAccountToggleCellHtml(u)}</td>
+      <td>${u.username === "admin" ? "-" : `<button type="button" class="js-toggle-user" data-user-id="${u.id}">${u.isActive !== false ? "Disable" : "Enable"}</button>`}</td>
     </tr>
   `).join("");
 }
@@ -2519,10 +2494,9 @@ createUserForm.addEventListener("submit", async (event) => {
 
 usersTableBody.addEventListener("click", async (event) => {
   const btn = event.target.closest(".js-toggle-user");
-  if (!btn) return;
+  if (!btn || !isAdminUser()) return;
   const user = state.users.find((u) => u.id === btn.dataset.userId);
   if (!user) return;
-  if (!isAdminUser() && !canManagerToggleUserAccount(user)) return;
   user.isActive = !(user.isActive !== false);
   await saveUserRecord(user);
   renderUsersTable();
