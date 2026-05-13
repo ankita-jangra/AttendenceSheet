@@ -1511,7 +1511,7 @@ function bulkAttendanceRowHtml(person, dateStr) {
       <td>${escapeHtml(normalizeDepartment(person))}</td>
       ${salaryCell}
       ${statusCells}`;
-  if (!hasFullStaffAccess()) {
+  if (!canToggleStaffActive()) {
     return `${rowCore}
     </tr>`;
   }
@@ -1532,14 +1532,14 @@ function getBulkAttendanceStaffList() {
 function setBulkAttendanceTableHeader() {
   const row = bulkAttendanceForm?.querySelector("thead tr");
   if (!row) return;
-  row.innerHTML = hasFullStaffAccess()
+  row.innerHTML = canToggleStaffActive()
     ? "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Status</th><th>Hours (if Partial)</th><th>Extra Hours</th><th>Action</th>"
     : "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Status</th><th>Hours (if Partial)</th><th>Extra Hours</th>";
 }
 
 function renderBulkAttendanceRows() {
   setBulkAttendanceTableHeader();
-  const bulkCols = hasFullStaffAccess() ? 7 : 6;
+  const bulkCols = canToggleStaffActive() ? 7 : 6;
   updateMarkAttendanceDeptGate();
   if (!isMarkAttendanceDepartmentSelected()) {
     bulkAttendanceBody.innerHTML = `<tr><td colspan="${bulkCols}" class="empty">Select a department above to load staff and mark attendance.</td></tr>`;
@@ -1878,7 +1878,7 @@ function isAdminUser() {
   return currentUser?.role === "admin";
 }
 
-/** Managers may add staff, mark attendance, weekly salary view, and attendance records — no salary/staff edits, department list, advances, etc. */
+/** Managers may add staff, mark attendance, weekly salary view, attendance records, and disable/enable staff — no salary edits, department list, advances, or user management. */
 function isManagerUser() {
   return currentUser?.role === "manager";
 }
@@ -1889,6 +1889,12 @@ function hasFullStaffAccess() {
   return !isManagerUser();
 }
 
+/** Disable/enable staff (active flag) on Mark Attendance — managers and full-access roles. */
+function canToggleStaffActive() {
+  if (!currentUser) return false;
+  return hasFullStaffAccess() || isManagerUser();
+}
+
 function updateRoleBasedUI() {
   if (!currentUser) return;
   const mgr = isManagerUser();
@@ -1897,8 +1903,6 @@ function updateRoleBasedUI() {
   });
   const deptCard = document.getElementById("department-management-card");
   if (deptCard) deptCard.classList.toggle("hidden", mgr);
-  const disabledSection = document.getElementById("disabled-staff-section");
-  if (disabledSection) disabledSection.classList.toggle("hidden", mgr);
   if (applySalaryDeductionsBtn) applySalaryDeductionsBtn.classList.toggle("hidden", mgr);
   renderBulkAttendanceRows();
   renderStaff();
@@ -1979,6 +1983,16 @@ function setAuthUI() {
   }
 }
 
+function renderUserManagementActionCell(u) {
+  const idAttr = escapeHtml(u.id);
+  const statusBtn =
+    u.username === "admin"
+      ? "<span>—</span>"
+      : `<button type="button" class="js-toggle-user" data-user-id="${idAttr}">${u.isActive !== false ? "Disable" : "Enable"}</button>`;
+  const resetBtn = `<button type="button" class="js-reset-user-password" data-user-id="${idAttr}">Reset password</button>`;
+  return `<div class="user-mgmt-actions">${statusBtn}${resetBtn}</div>`;
+}
+
 function renderUsersTable() {
   if (!usersTableBody) return;
   if (!state.users.length) {
@@ -1987,10 +2001,10 @@ function renderUsersTable() {
   }
   usersTableBody.innerHTML = state.users.map((u) => `
     <tr>
-      <td>${u.username}</td>
-      <td>${u.role}</td>
+      <td>${escapeHtml(u.username)}</td>
+      <td>${escapeHtml(u.role)}</td>
       <td>${u.isActive !== false ? "Active" : "Disabled"}</td>
-      <td>${u.username === "admin" ? "-" : `<button type="button" class="js-toggle-user" data-user-id="${u.id}">${u.isActive !== false ? "Disable" : "Enable"}</button>`}</td>
+      <td>${renderUserManagementActionCell(u)}</td>
     </tr>
   `).join("");
 }
@@ -2087,7 +2101,7 @@ bulkAttendanceBody.addEventListener("input", () => {
 bulkAttendanceBody.addEventListener("click", async (event) => {
   const disableBtn = event.target.closest(".js-disable-staff");
   if (!disableBtn) return;
-  if (!hasFullStaffAccess()) return;
+  if (!canToggleStaffActive()) return;
   const staffId = disableBtn.dataset.staffId;
   const person = getStaffById(staffId);
   if (!person) return;
@@ -2102,7 +2116,7 @@ bulkAttendanceBody.addEventListener("click", async (event) => {
 });
 
 disabledStaffBody.addEventListener("click", async (event) => {
-  if (!hasFullStaffAccess()) return;
+  if (!canToggleStaffActive()) return;
   const btn = event.target.closest(".js-enable-staff");
   if (!btn) return;
   const staffId = btn.dataset.staffId;
@@ -2493,8 +2507,26 @@ createUserForm.addEventListener("submit", async (event) => {
 });
 
 usersTableBody.addEventListener("click", async (event) => {
+  if (!isAdminUser()) return;
+  const resetBtn = event.target.closest(".js-reset-user-password");
+  if (resetBtn) {
+    const user = state.users.find((u) => u.id === resetBtn.dataset.userId);
+    if (!user) return;
+    const entered = window.prompt(`New password for "${user.username}":`, "");
+    if (entered === null) return;
+    const newPassword = entered.trim();
+    if (!newPassword) {
+      window.alert("Password cannot be empty.");
+      return;
+    }
+    if (!window.confirm(`Save new password for "${user.username}"?`)) return;
+    user.password = newPassword;
+    await saveUserRecord(user);
+    renderUsersTable();
+    return;
+  }
   const btn = event.target.closest(".js-toggle-user");
-  if (!btn || !isAdminUser()) return;
+  if (!btn) return;
   const user = state.users.find((u) => u.id === btn.dataset.userId);
   if (!user) return;
   user.isActive = !(user.isActive !== false);
