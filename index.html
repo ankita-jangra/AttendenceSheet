@@ -87,7 +87,7 @@
           <li><strong>Weekly salary</strong> — Pick a date range and department, see totals (present, partial, hours, advances, deductions, payment), edit days from the sheet, and export a PDF or CSV.</li>
           <li><strong>Attendance records</strong> — Browse a week or month grid by department; open a single day to correct an entry.</li>
           <li><strong>Reports &amp; payroll helpers</strong> — Weekly paid summary, per-staff salary tools, and advance tracking (available depending on your role).</li>
-          <li><strong>Users &amp; roles</strong> — Admins can manage app logins. Other roles see only the sections they are allowed to use.</li>
+          <li><strong>Users &amp; roles</strong> — Admins create logins and can enable or disable any account except the built-in admin. Managers can enable or disable <strong>User</strong> role accounts only.</li>
           <li><strong>Theme</strong> — Switch light or dark; your choice is remembered on this device.</li>
         </ul>
 
@@ -95,7 +95,7 @@
         <ul>
           <li><strong>Admin</strong> — Full access, including user management.</li>
           <li><strong>User</strong> — Full operational access except user administration.</li>
-          <li><strong>Manager</strong> — Add staff, mark attendance, weekly salary and attendance records; salary/staff editing and advances are restricted.</li>
+          <li><strong>Manager</strong> — Add staff, mark attendance, weekly salary and attendance records; salary/staff editing and advances are restricted. Can enable or disable <strong>User</strong> role logins from User Management.</li>
         </ul>
 
         <p class="hint">
@@ -159,8 +159,9 @@
     </section>
 
     <section id="user-management-page" class="page hidden">
-      <section class="card">
-        <h2>User Management (Admin Only)</h2>
+      <section class="card" id="user-management-create-card">
+        <h2>Create login</h2>
+        <p class="hint">Only administrators can add new users. Managers may enable or disable existing accounts that have the <strong>User</strong> role (not Admin or Manager).</p>
         <form id="create-user-form" class="grid-form">
           <label>
             Username
