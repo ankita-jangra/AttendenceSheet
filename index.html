@@ -11,7 +11,7 @@
       }
     } catch (_e) {}
   </script>
-  <link rel="stylesheet" href="styles.css?v=20260417-10">
+  <link rel="stylesheet" href="styles.css?v=20260517-2">
 </head>
 <body>
   <div class="background-blur"></div>
@@ -25,6 +25,7 @@
         <button type="button" id="open-info-page">Info</button>
         <button type="button" id="go-dashboard">Dashboard</button>
         <button type="button" id="go-mark-attendance">Mark Attendance</button>
+        <button type="button" id="go-quick-update">Quick Update</button>
         <button type="button" id="logout-btn">Logout</button>
       </div>
     </header>
@@ -66,6 +67,7 @@
           <button type="button" id="open-advance-page" data-requires-full-access>Advance Management</button>
           <button type="button" id="open-user-management-page">User Management</button>
           <button type="button" id="open-attendance-records-page">Attendance Records</button>
+          <button type="button" id="open-quick-update-page">Quick Update</button>
           <button type="button" id="open-info-from-home">App info</button>
         </div>
       </section>
@@ -83,9 +85,10 @@
         <h3>What you can do</h3>
         <ul>
           <li><strong>Staff</strong> — Add team members, assign departments, and set daily wage (where your role allows).</li>
-          <li><strong>Mark attendance</strong> — Enter Present, Absent, or Partial hours per person for a selected date; optional extra hours. Managers and full-access roles can disable or re-enable staff for a department from this page.</li>
+          <li><strong>Mark attendance</strong> — Enter Present, Absent, or Partial hours per person for a selected date. Weekly overtime goes in <strong>Extra (week)</strong> on Quick Update or Weekly Salary. Managers can disable or re-enable staff from this page.</li>
           <li><strong>Weekly salary</strong> — Pick a date range and department, see totals (present, partial, hours, advances, deductions, payment), edit days from the sheet, and export a PDF or CSV.</li>
           <li><strong>Attendance records</strong> — Browse a week or month grid by department; open a single day to correct an entry.</li>
+          <li><strong>Quick Update</strong> — Edit P / A / X / P/4 for all staff and dates in one sheet, plus weekly extra hours, then Save.</li>
           <li><strong>Reports &amp; payroll helpers</strong> — Weekly paid summary, per-staff salary tools, and advance tracking (available depending on your role).</li>
           <li><strong>Users &amp; roles</strong> — Admins can manage app logins, enable or disable accounts, and reset any user&apos;s password. Other roles see only the sections they are allowed to use.</li>
           <li><strong>Theme</strong> — Switch light or dark; your choice is remembered on this device.</li>
@@ -142,11 +145,10 @@
                   <th>Date</th>
                   <th>Status</th>
                   <th>Hours (Partial)</th>
-                  <th>Extra Hours</th>
                 </tr>
               </thead>
               <tbody id="weekly-paid-editor-body">
-                <tr><td colspan="4" class="empty">Select staff to edit.</td></tr>
+                <tr><td colspan="3" class="empty">Select staff to edit.</td></tr>
               </tbody>
             </table>
           </div>
@@ -244,7 +246,7 @@
     <section id="weekly-salary-page" class="page hidden">
       <section class="card">
         <h2>Weekly Salary</h2>
-        <p class="hint"><strong>Department</strong> is required first — then set dates and use <strong>Refresh Salary</strong>. Use <strong>Start Date</strong> and <strong>End Date</strong> for any period — e.g. set them to the first and last day of a month for a monthly report. If either date is cleared, the app uses the latest week (Sun–Sat). <strong>Download CSV (Excel)</strong> gives a file you can open in Excel with all columns; the PDF uses real text so you can select and copy from it. After data loads, use <strong>Full screen preview</strong> to view wide tables using the full window.</p>
+        <p class="hint"><strong>Department</strong> is required first — then set dates and use <strong>Refresh Salary</strong>. Use <strong>Start Date</strong> and <strong>End Date</strong> for any period — e.g. set them to the first and last day of a month for a monthly report. If either date is cleared, the app uses the latest week (Sun–Sat). Enter <strong>Weekly extra (hrs)</strong> once per staff for that date range (included in pay and in PDF/CSV <strong>Ex</strong> column). <strong>Download CSV (Excel)</strong> gives a file you can open in Excel with all columns; the PDF uses real text so you can select and copy from it. After data loads, use <strong>Full screen preview</strong> to view wide tables using the full window.</p>
         <form id="salary-form" class="grid-form">
           <label>
             Department
@@ -282,7 +284,6 @@
                     <th>Date</th>
                     <th>Status</th>
                     <th>Partial hours</th>
-                    <th>Extra hours</th>
                   </tr>
                 </thead>
                 <tbody id="salary-attendance-editor-body"></tbody>
@@ -400,6 +401,46 @@
       </section>
     </section>
 
+    <section id="quick-update-page" class="page hidden">
+      <section class="card">
+        <h2>Quick Update</h2>
+        <p class="hint">Excel-style sheet for the whole week or month. Use <strong>P</strong>, <strong>X</strong>, or <strong>P/4</strong> in each date column. <strong>Weekly</strong> is all attendance pay (full and partial days). Enter overtime hours in <strong>Extra (week)</strong>; <strong>Extra pay</strong> shows the rupee amount. Click <strong>Update</strong>, edit, then <strong>Save</strong>. Use <strong>Print</strong> or <strong>Download CSV</strong> to export (staff with ₹0 total pay are omitted).</p>
+        <form id="quick-update-filter-form" class="grid-form">
+          <label>
+            Department
+            <select id="filter-dept-quick"></select>
+          </label>
+          <label>
+            View
+            <select id="quick-view-mode">
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </label>
+          <label>
+            Reference Date
+            <input type="date" id="quick-ref-date">
+          </label>
+          <button type="submit">Apply</button>
+          <button type="button" id="quick-update-edit-btn">Update</button>
+          <button type="button" id="quick-update-save-btn" class="hidden" disabled>Save</button>
+          <button type="button" id="quick-update-cancel-btn" class="hidden">Cancel</button>
+          <button type="button" id="quick-update-print-btn">Print</button>
+          <button type="button" id="quick-update-csv-btn">Download CSV</button>
+        </form>
+        <p id="quick-update-range-label" class="hint"></p>
+        <div class="table-wrap quick-update-wrap">
+          <table class="quick-update-table" id="quick-update-table">
+            <thead id="quick-update-head"></thead>
+            <tbody id="quick-update-body">
+              <tr><td colspan="4" class="empty">Select filters and click Apply.</td></tr>
+            </tbody>
+            <tfoot id="quick-update-foot"></tfoot>
+          </table>
+        </div>
+      </section>
+    </section>
+
     <section id="attendance-records-page" class="page hidden">
       <section class="card">
         <h2>Attendance Records</h2>
@@ -457,10 +498,6 @@
             Partial Hours
             <input type="number" id="attendance-update-partial-hours" min="0" max="8" step="0.5" value="4" disabled>
           </label>
-          <label>
-            Extra Hours
-            <input type="number" id="attendance-update-extra-hours" min="0" max="16" step="0.5" value="0">
-          </label>
           <button type="submit">Save Update</button>
           <button type="button" id="attendance-update-cancel">Cancel</button>
         </form>
@@ -483,7 +520,7 @@
             <button type="button" id="bulk-attendance-refresh">Refresh</button>
             <button type="submit" id="bulk-save-all-btn">Save All Attendance</button>
           </div>
-          <p class="hint"><strong>Department</strong> is required first — then pick a date and mark attendance. Partial means custom base hours. Add extra time separately. Present base is 8 hours, Absent base is 0. <strong>Salary / Day</strong> is read-only here — edit wages on <strong>Staff Salary</strong> or when adding staff. Use <strong>Refresh</strong> to reload saved marks. After everyone is saved for that date, <strong>Save All Attendance</strong> stays off until you change attendance or pick another day.</p>
+          <p class="hint"><strong>Department</strong> is required first — then pick a date and mark attendance. Partial means custom base hours (present = 8 h, absent = 0). For <strong>extra hours in a week</strong>, use <strong>Extra (week)</strong> on Quick Update or <strong>Weekly extra (hrs)</strong> on Weekly Salary. <strong>Salary / Day</strong> is read-only here. Use <strong>Refresh</strong> to reload saved marks.</p>
           <div class="table-wrap">
             <table>
               <thead>
@@ -493,13 +530,12 @@
                   <th>Salary / Day</th>
                   <th>Status</th>
                   <th>Hours (if Partial)</th>
-                  <th>Extra Hours</th>
                   <th>Action</th>
                 </tr>
               </thead>
               <tbody id="bulk-attendance-body">
                 <tr>
-                  <td colspan="7" class="empty">No active staff available. Add or enable staff.</td>
+                  <td colspan="6" class="empty">No active staff available. Add or enable staff.</td>
                 </tr>
               </tbody>
             </table>
@@ -546,6 +582,6 @@
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="config.js"></script>
   <script src="supabase.js?v=20260417-1"></script>
-  <script src="script.js?v=20260417-21"></script>
+  <script src="script.js?v=20260517-16"></script>
 </body>
 </html>

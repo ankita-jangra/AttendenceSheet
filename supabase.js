@@ -43,18 +43,22 @@
 
   async function loadAll() {
     if (!client) return null;
-    const [staffRes, attendanceRes, advanceRes, usersRes, settingsRes] = await Promise.all([
+    const [staffRes, attendanceRes, advanceRes, usersRes, settingsRes, weeklyExtraRes] = await Promise.all([
       client.from("staff").select("*").order("created_at", { ascending: true }),
       client.from("attendance").select("*").order("date", { ascending: false }),
       client.from("advances").select("*").order("date", { ascending: false }),
       client.from("app_users").select("*").order("created_at", { ascending: true }),
       client.from("app_settings").select("value").eq("key", "custom_departments").maybeSingle(),
+      client.from("weekly_extra_hours").select("*").order("start_date", { ascending: false }),
     ]);
 
     if (staffRes.error) throw staffRes.error;
     if (attendanceRes.error) throw attendanceRes.error;
     if (advanceRes.error) throw advanceRes.error;
     if (usersRes.error) throw usersRes.error;
+    if (weeklyExtraRes.error) {
+      console.warn("weekly_extra_hours load:", weeklyExtraRes.error.message || weeklyExtraRes.error);
+    }
 
     return {
       customDepartments: parseCustomDepartmentsRow(settingsRes),
@@ -88,6 +92,13 @@
         password: row.password,
         role: row.role || "user",
         isActive: row.is_active !== false,
+      })),
+      weeklyExtraHours: weeklyExtraRes.error ? [] : (weeklyExtraRes.data || []).map((row) => ({
+        id: row.id,
+        staffId: row.staff_id,
+        startDate: row.start_date,
+        endDate: row.end_date,
+        hours: Number(row.hours) || 0,
       })),
     };
   }
@@ -162,6 +173,18 @@
     if (error) throw error;
   }
 
+  async function upsertWeeklyExtra(rec) {
+    if (!client) return;
+    const { error } = await client.from("weekly_extra_hours").upsert({
+      id: rec.id,
+      staff_id: rec.staffId,
+      start_date: rec.startDate,
+      end_date: rec.endDate,
+      hours: Number(rec.hours) || 0,
+    }, { onConflict: "id" });
+    if (error) throw error;
+  }
+
   window.AttendanceCloud = {
     isConfigured,
     loadAll,
@@ -170,5 +193,6 @@
     upsertAttendance,
     upsertAdvance,
     upsertUser,
+    upsertWeeklyExtra,
   };
 })();

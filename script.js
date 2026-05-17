@@ -1,11 +1,12 @@
 const STORAGE_KEY = "attendance_salary_app_v1";
 const DB_NAME = "attendance_salary_db";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STAFF_STORE = "staff";
 const ATTENDANCE_STORE = "attendance";
 const ADVANCE_STORE = "advances";
 const USERS_STORE = "users";
 const SETTINGS_STORE = "settings";
+const WEEKLY_EXTRA_STORE = "weekly_extra_hours";
 const AUTH_USER_KEY = "attendance_auth_user";
 const WORKING_HOURS_PER_DAY = 8;
 const DEFAULT_DEPARTMENT = "General";
@@ -76,7 +77,6 @@ const attendanceUpdateDate = document.getElementById("attendance-update-date");
 const attendanceUpdateStaff = document.getElementById("attendance-update-staff");
 const attendanceUpdateStatus = document.getElementById("attendance-update-status");
 const attendanceUpdatePartialHours = document.getElementById("attendance-update-partial-hours");
-const attendanceUpdateExtraHours = document.getElementById("attendance-update-extra-hours");
 const attendanceUpdateCancelBtn = document.getElementById("attendance-update-cancel");
 const loginPage = document.getElementById("login-page");
 const loginForm = document.getElementById("login-form");
@@ -95,6 +95,7 @@ const usersTableBody = document.getElementById("users-table-body");
 const dbStatus = document.getElementById("db-status");
 const goDashboardBtn = document.getElementById("go-dashboard");
 const goMarkAttendanceBtn = document.getElementById("go-mark-attendance");
+const goQuickUpdateBtn = document.getElementById("go-quick-update");
 const openInfoPageBtn = document.getElementById("open-info-page");
 const openInfoFromHomeBtn = document.getElementById("open-info-from-home");
 const themeToggleButtons = document.querySelectorAll("[data-theme-toggle]");
@@ -105,6 +106,20 @@ const weeklyPaidPage = document.getElementById("weekly-paid-page");
 const staffSalaryPage = document.getElementById("staff-salary-page");
 const advancePage = document.getElementById("advance-page");
 const attendanceRecordsPage = document.getElementById("attendance-records-page");
+const quickUpdatePage = document.getElementById("quick-update-page");
+const quickUpdateFilterForm = document.getElementById("quick-update-filter-form");
+const filterDeptQuick = document.getElementById("filter-dept-quick");
+const quickViewMode = document.getElementById("quick-view-mode");
+const quickRefDate = document.getElementById("quick-ref-date");
+const quickUpdateHead = document.getElementById("quick-update-head");
+const quickUpdateBody = document.getElementById("quick-update-body");
+const quickUpdateRangeLabel = document.getElementById("quick-update-range-label");
+const quickUpdateEditBtn = document.getElementById("quick-update-edit-btn");
+const quickUpdateSaveBtn = document.getElementById("quick-update-save-btn");
+const quickUpdateCancelBtn = document.getElementById("quick-update-cancel-btn");
+const quickUpdatePrintBtn = document.getElementById("quick-update-print-btn");
+const quickUpdateCsvBtn = document.getElementById("quick-update-csv-btn");
+const openQuickUpdatePageBtn = document.getElementById("open-quick-update-page");
 const attendancePage = document.getElementById("attendance-page");
 const infoPage = document.getElementById("info-page");
 const openAddStaffPageBtn = document.getElementById("open-add-staff-page");
@@ -123,7 +138,7 @@ const filterDeptAdvance = document.getElementById("filter-dept-advance");
 const newDepartmentNameInput = document.getElementById("new-department-name");
 const customDepartmentsList = document.getElementById("custom-departments-list");
 
-let state = { staff: [], attendance: [], advances: [], users: [] };
+let state = { staff: [], attendance: [], advances: [], users: [], weeklyExtraHours: [] };
 let customDepartments = [];
 let currentSalaryRows = [];
 let currentWeeklySummaryRange = null;
@@ -134,6 +149,8 @@ let dbRef = null;
 let currentUser = null;
 /** User edited the bulk form after load; re-enables Save when the day was already complete. */
 let bulkMarkFormDirty = false;
+let quickUpdateEditMode = false;
+let quickUpdateRange = null;
 /** Live clock on dashboard while logged in. */
 let dashboardClockTimer = null;
 const hindiNameCache = {};
@@ -217,6 +234,9 @@ function openDatabase() {
       if (!db.objectStoreNames.contains(SETTINGS_STORE)) {
         db.createObjectStore(SETTINGS_STORE, { keyPath: "key" });
       }
+      if (!db.objectStoreNames.contains(WEEKLY_EXTRA_STORE)) {
+        db.createObjectStore(WEEKLY_EXTRA_STORE, { keyPath: "id" });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -251,11 +271,18 @@ function getSetting(db, key) {
 }
 
 async function loadState(db) {
-  const [staff, attendance, advances, users] = await Promise.all([readAll(db, STAFF_STORE), readAll(db, ATTENDANCE_STORE), readAll(db, ADVANCE_STORE), readAll(db, USERS_STORE)]);
+  const [staff, attendance, advances, users, weeklyExtra] = await Promise.all([
+    readAll(db, STAFF_STORE),
+    readAll(db, ATTENDANCE_STORE),
+    readAll(db, ADVANCE_STORE),
+    readAll(db, USERS_STORE),
+    readAll(db, WEEKLY_EXTRA_STORE),
+  ]);
   state.staff = Array.isArray(staff) ? staff : [];
   state.attendance = Array.isArray(attendance) ? attendance : [];
   state.advances = Array.isArray(advances) ? advances : [];
   state.users = Array.isArray(users) ? users : [];
+  state.weeklyExtraHours = Array.isArray(weeklyExtra) ? weeklyExtra : [];
 }
 
 async function migrateFromLocalStorage(db) {
@@ -619,6 +646,7 @@ const DEPARTMENT_FILTER_IDS = [
   "filter-dept-mark",
   "filter-dept-staff",
   "filter-dept-advance",
+  "filter-dept-quick",
 ];
 
 function refreshDepartmentDatalistAndFilters() {
@@ -778,6 +806,57 @@ function getWeekDays(startDate, endDate) {
   return days;
 }
 
+function weeklyExtraRecordId(staffId, startDate, endDate) {
+  return `${staffId}_${startDate}_${endDate}`;
+}
+
+function getWeeklyExtraHours(staffId, startDate, endDate) {
+  const id = weeklyExtraRecordId(staffId, startDate, endDate);
+  const rec = state.weeklyExtraHours.find((r) => r.id === id);
+  return rec ? Math.max(0, Number(rec.hours) || 0) : 0;
+}
+
+async function saveWeeklyExtraHours(staffId, startDate, endDate, hours) {
+  const id = weeklyExtraRecordId(staffId, startDate, endDate);
+  const h = Math.max(0, Math.min(999, Number(hours) || 0));
+  const rec = { id, staffId, startDate, endDate, hours: h };
+  if (useCloudDb) await window.AttendanceCloud.upsertWeeklyExtra(rec);
+  else if (dbRef) await putOne(dbRef, WEEKLY_EXTRA_STORE, rec);
+  const idx = state.weeklyExtraHours.findIndex((r) => r.id === id);
+  if (idx >= 0) state.weeklyExtraHours[idx] = rec;
+  else state.weeklyExtraHours.push(rec);
+}
+
+function attendanceBaseHours(row) {
+  if (!row) return 0;
+  if (row.status === "Present") return WORKING_HOURS_PER_DAY;
+  if (row.status === "Partial") {
+    const stored = Number(row.hours) || 0;
+    const legacyExtra = Number(row.extraHours) || 0;
+    const base = legacyExtra > 0 ? stored - legacyExtra : stored;
+    return Math.max(0, Math.min(WORKING_HOURS_PER_DAY, base));
+  }
+  return 0;
+}
+
+function buildAttendanceRecord(staffId, date, status, partialHours, extraHours = 0) {
+  const extra = Math.max(0, Math.min(16, Number(extraHours) || 0));
+  const base =
+    status === "Present"
+      ? WORKING_HOURS_PER_DAY
+      : status === "Absent"
+        ? 0
+        : Math.max(0, Math.min(WORKING_HOURS_PER_DAY, Number(partialHours) || 0));
+  return {
+    id: `${staffId}_${date}`,
+    staffId,
+    date,
+    status,
+    hours: base + extra,
+    extraHours: extra,
+  };
+}
+
 function calculateSalaryForStaff(staff, startDate, endDate) {
   const hourlySalary = isAttendanceOnlyDepartment(staff) ? 0 : Number(staff.salaryPerDay) / WORKING_HOURS_PER_DAY;
   const records = state.attendance.filter((entry) => entry.staffId === staff.id && entry.date >= startDate && entry.date <= endDate);
@@ -785,23 +864,172 @@ function calculateSalaryForStaff(staff, startDate, endDate) {
   let absentDays = 0;
   let partialDays = 0;
   let partialHours = 0;
-  let extraHours = 0;
   let totalHours = 0;
   for (const row of records) {
-    extraHours += Number(row.extraHours) || 0;
     if (row.status === "Present") {
       presentDays += 1;
-      totalHours += Number(row.hours) || WORKING_HOURS_PER_DAY;
+      totalHours += WORKING_HOURS_PER_DAY;
     } else if (row.status === "Partial") {
       partialDays += 1;
-      const currentPartialHours = Number(row.hours) || 0;
+      const currentPartialHours = attendanceBaseHours(row);
       partialHours += currentPartialHours;
       totalHours += currentPartialHours;
     } else {
       absentDays += 1;
     }
   }
+  const extraHours = getWeeklyExtraHours(staff.id, startDate, endDate);
+  totalHours += extraHours;
   return { presentDays, partialDays, partialHours, extraHours, absentDays, totalHours, payable: totalHours * hourlySalary };
+}
+
+/** Weekly = full present days; part-time = partial hours; total includes weekly extra hours. */
+function calculateSalaryBreakdown(staff, startDate, endDate, options = {}) {
+  const attOnly = isAttendanceOnlyDepartment(staff);
+  let daily = Number(staff.salaryPerDay) || 0;
+  if (options.gridOverride?.dailyWage != null && options.gridOverride.dailyWage !== "") {
+    const w = Number(options.gridOverride.dailyWage);
+    if (!Number.isNaN(w) && w >= 0) daily = w;
+  }
+  const hourly = daily / WORKING_HOURS_PER_DAY;
+  let presentDays = 0;
+  let partialDays = 0;
+  let partialHours = 0;
+  let extraHours = 0;
+  if (options.gridOverride) {
+    for (const { raw } of options.gridOverride.cells) {
+      const parsed = parseQuickCellInput(raw);
+      if (!parsed) continue;
+      if (parsed.status === "Present") presentDays += 1;
+      else if (parsed.status === "Partial") {
+        partialDays += 1;
+        partialHours += parsed.partialHours;
+      }
+    }
+    extraHours = Math.max(0, Number(options.gridOverride.weeklyEx) || 0);
+  } else {
+    const s = calculateSalaryForStaff(staff, startDate, endDate);
+    presentDays = s.presentDays;
+    partialDays = s.partialDays;
+    partialHours = s.partialHours;
+    extraHours = s.extraHours;
+  }
+
+  const weeklyPay = presentDays * daily;
+  const partTimePay = partialHours * hourly;
+  const attendancePay = weeklyPay + partTimePay;
+  const extraPay = extraHours * hourly;
+  const totalPay = attendancePay + extraPay;
+  return {
+    weeklyPay,
+    partTimePay,
+    attendancePay,
+    extraPay,
+    totalPay,
+    presentDays,
+    partialDays,
+    partialHours,
+    extraHours,
+    attOnly,
+  };
+}
+
+function getQuickUpdateRowGridOverride(rowEl) {
+  if (!rowEl || !quickUpdateRange) return null;
+  const staffId = rowEl.dataset.quickStaff;
+  if (!staffId) return null;
+  const { startDate, endDate } = quickUpdateRange;
+  const days = getDateRangeList(startDate, endDate);
+  const cells = days.map((date) => {
+    const inp = rowEl.querySelector(`.js-quick-cell[data-date="${date}"]`);
+    return { date, raw: inp?.value ?? "" };
+  });
+  const exInp = rowEl.querySelector(".js-quick-weekly-extra");
+  const wageInp = rowEl.querySelector(".js-quick-wage");
+  return {
+    cells,
+    weeklyEx: exInp?.value ?? "",
+    dailyWage: wageInp != null ? wageInp.value : undefined,
+  };
+}
+
+function quickUpdateWageCellHtml(person) {
+  const attOnly = isAttendanceOnlyDepartment(person);
+  if (attOnly) return `<td class="quick-update-wage-col">—</td>`;
+  const wage = Number(person.salaryPerDay) || 0;
+  if (quickUpdateEditMode) {
+    return `<td class="quick-update-wage-col"><input type="number" class="compact-input js-quick-wage" data-staff-id="${person.id}" min="0" step="0.01" value="${wage}" title="Daily wage"></td>`;
+  }
+  return `<td class="quick-update-wage-col">${formatCurrency(wage)}</td>`;
+}
+
+function quickUpdateSalaryCellsHtml(person, startDate, endDate, rowEl) {
+  const override = quickUpdateEditMode && rowEl ? getQuickUpdateRowGridOverride(rowEl) : null;
+  const b = calculateSalaryBreakdown(
+    person,
+    startDate,
+    endDate,
+    override ? { gridOverride: override } : {},
+  );
+  if (b.attOnly) {
+    return `<td class="quick-update-pay-col">—</td><td class="quick-update-pay-col">—</td><td class="quick-update-pay-col quick-update-total-col">—</td>`;
+  }
+  return `
+    <td class="quick-update-pay-col" data-pay="weekly">${formatCurrency(b.attendancePay)}</td>
+    <td class="quick-update-pay-col" data-pay="extra">${formatCurrency(b.extraPay)}</td>
+    <td class="quick-update-pay-col quick-update-total-col" data-pay="total"><strong>${formatCurrency(b.totalPay)}</strong></td>
+  `;
+}
+
+function updateQuickUpdateRowSalaryCells(rowEl) {
+  if (!rowEl || !quickUpdateRange) return;
+  const person = getStaffById(rowEl.dataset.quickStaff);
+  if (!person) return;
+  const { startDate, endDate } = quickUpdateRange;
+  const payCells = [...rowEl.querySelectorAll(".quick-update-pay-col")];
+  if (payCells.length < 3) return;
+  const tmp = document.createElement("tr");
+  tmp.innerHTML = quickUpdateSalaryCellsHtml(person, startDate, endDate, rowEl);
+  const newCells = [...tmp.querySelectorAll(".quick-update-pay-col")];
+  newCells.forEach((cell, i) => {
+    if (payCells[i]) payCells[i].outerHTML = cell.outerHTML;
+  });
+  updateQuickUpdateFooterTotals();
+}
+
+function updateQuickUpdateFooterTotals() {
+  const foot = document.getElementById("quick-update-foot");
+  if (!foot || !quickUpdateRange) return;
+  const { startDate, endDate } = quickUpdateRange;
+  const staffList = getQuickUpdateStaffList();
+  let sumAttendance = 0;
+  let sumExtra = 0;
+  let sumTotal = 0;
+  let anyMoney = false;
+  staffList.forEach((person) => {
+    const row = quickUpdateBody?.querySelector(`tr[data-quick-staff="${person.id}"]`);
+    const override = quickUpdateEditMode && row ? getQuickUpdateRowGridOverride(row) : null;
+    const b = calculateSalaryBreakdown(person, startDate, endDate, override ? { gridOverride: override } : {});
+    if (!b.attOnly) {
+      anyMoney = true;
+      sumAttendance += b.attendancePay;
+      sumExtra += b.extraPay;
+      sumTotal += b.totalPay;
+    }
+  });
+  if (!anyMoney) {
+    foot.innerHTML = "";
+    return;
+  }
+  foot.innerHTML = `
+    <tr class="quick-update-foot-row">
+      <td colspan="2"><strong>Total (all staff)</strong></td>
+      <td colspan="${getDateRangeList(startDate, endDate).length + 2}"></td>
+      <td class="quick-update-pay-col"><strong>${formatCurrency(sumAttendance)}</strong></td>
+      <td class="quick-update-pay-col"><strong>${formatCurrency(sumExtra)}</strong></td>
+      <td class="quick-update-pay-col quick-update-total-col"><strong>${formatCurrency(sumTotal)}</strong></td>
+    </tr>
+  `;
 }
 
 function resolveSalaryRange() {
@@ -848,7 +1076,7 @@ function getDailySalaryValue(staff, dateIso) {
   if (!row) return 0;
   const hourly = Number(staff.salaryPerDay) / WORKING_HOURS_PER_DAY;
   if (row.status === "Present") return Number(staff.salaryPerDay);
-  if (row.status === "Partial") return (Number(row.hours) || 0) * hourly;
+  if (row.status === "Partial") return attendanceBaseHours(row) * hourly;
   return 0;
 }
 
@@ -878,11 +1106,7 @@ function openSalaryPageAttendanceEditor(staffId) {
   salaryAttendanceEditorBody.innerHTML = days.map((date) => {
     const existing = state.attendance.find((a) => a.staffId === staffId && a.date === date);
     const status = existing?.status || "Absent";
-    const partialHours =
-      status === "Partial"
-        ? Math.min(WORKING_HOURS_PER_DAY, Number(existing?.hours || 0) - Number(existing?.extraHours || 0))
-        : 4;
-    const extraHours = Number(existing?.extraHours || 0);
+    const partialHours = status === "Partial" ? attendanceBaseHours(existing) : 4;
     return `
       <tr data-salary-edit-date="${date}">
         <td>${date}</td>
@@ -894,7 +1118,6 @@ function openSalaryPageAttendanceEditor(staffId) {
           </select>
         </td>
         <td><input type="number" class="compact-input js-salary-page-partial" min="0" max="8" step="0.5" value="${partialHours}" ${status === "Partial" ? "" : "disabled"} aria-label="Partial hours ${date}"></td>
-        <td><input type="number" class="compact-input js-salary-page-extra" min="0" max="16" step="0.5" value="${extraHours}" aria-label="Extra hours ${date}"></td>
       </tr>
     `;
   }).join("");
@@ -966,6 +1189,9 @@ function renderSalaryOverview() {
       : deductionReadOnly
         ? `<td>${formatCurrency(suggestedDeduction)}</td>`
         : `<td><input type="number" class="compact-input js-deduct-input" data-staff-id="${person.id}" min="0" step="0.01" value="${suggestedDeduction.toFixed(2)}"></td>`;
+    const weeklyExCell = attOnly
+      ? "<td>—</td>"
+      : `<td><input type="number" class="compact-input js-weekly-extra-hours" data-staff-id="${person.id}" min="0" max="999" step="0.5" value="${s.extraHours}" title="Extra hours for this week (one entry)"></td>`;
     return `
       <tr>
         <td>${escapeHtml(person.name)}</td>
@@ -973,8 +1199,7 @@ function renderSalaryOverview() {
         <td>${money(person.salaryPerDay)}</td>
         <td>${s.presentDays}</td>
         <td>${s.partialDays}</td>
-        <td>${s.partialHours}</td>
-        <td>${s.extraHours}</td>
+        ${weeklyExCell}
         <td>${s.absentDays}</td>
         <td>${s.totalHours}</td>
         <td>${money(adv.previous)}</td>
@@ -989,7 +1214,7 @@ function renderSalaryOverview() {
 
   const footerRow = `
     <tr class="salary-table-footer">
-      <td colspan="8"><strong>Total (all staff)</strong></td>
+      <td colspan="7"><strong>Total (all staff)</strong></td>
       <td><strong>${totalHoursAll.toFixed(1)}</strong></td>
       <td colspan="3"></td>
       <td><strong>${formatCurrency(totalPaymentAll)}</strong></td>
@@ -1045,8 +1270,7 @@ function renderSalaryOverview() {
             <th>Daily Wage</th>
             <th>Present</th>
             <th>Partial</th>
-            <th>Part Time Hours</th>
-            <th>Extra Hours</th>
+            <th>Weekly extra (hrs)</th>
             <th>Absent</th>
             <th>Total Hours</th>
             <th>Prev Advance</th>
@@ -1406,9 +1630,8 @@ function renderAttendanceHistory() {
       const row = state.attendance.find((entry) => entry.staffId === person.id && entry.date === date);
       if (!row || row.status === "Absent") return "<td>X</td>";
       if (row.status === "Present") return "<td>P</td>";
-      const extra = Number(row.extraHours || 0);
-      const partialHours = Math.max(0, (Number(row.hours) || 0) - extra);
-      const marker = partialHours === 4 ? "P/2" : `P/${partialHours}`;
+      const partialHours = attendanceBaseHours(row);
+      const marker = partialHours === WORKING_HOURS_PER_DAY / 2 ? "P/2" : `P/${partialHours}`;
       return `<td>${marker}</td>`;
     }).join("");
     return `
@@ -1421,18 +1644,429 @@ function renderAttendanceHistory() {
   }).join("");
 }
 
+function resolveQuickUpdateRange() {
+  const ref = quickRefDate?.value || todayString();
+  const mode = quickViewMode?.value || "weekly";
+  const [startDate, endDate] = mode === "monthly" ? getMonthlyRangeByDate(ref) : getWeeklyRangeByDate(ref);
+  quickUpdateRange = { startDate, endDate };
+  return quickUpdateRange;
+}
+
+function getQuickUpdateStaffList() {
+  const deptFilter = getDepartmentFilter(filterDeptQuick);
+  let staffList = state.staff.filter((person) => {
+    if (person.isActive !== false) return true;
+    if (!quickUpdateRange) return false;
+    return state.attendance.some(
+      (entry) =>
+        entry.staffId === person.id &&
+        entry.date >= quickUpdateRange.startDate &&
+        entry.date <= quickUpdateRange.endDate,
+    );
+  });
+  return filterStaffByDepartment(staffList, deptFilter);
+}
+
+function attendanceMarkerForQuick(staffId, dateIso) {
+  const row = state.attendance.find((entry) => entry.staffId === staffId && entry.date === dateIso);
+  if (!row || row.status === "Absent") return "X";
+  if (row.status === "Present") return "P";
+  const partialHours = attendanceBaseHours(row);
+  if (partialHours === WORKING_HOURS_PER_DAY / 2) return "P/2";
+  return `P/${partialHours}`;
+}
+
+function parseQuickCellInput(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return { status: "Absent", partialHours: 0 };
+  const u = s.toUpperCase();
+  if (u === "P" || u === "PRESENT") return { status: "Present", partialHours: 0 };
+  if (u === "A" || u === "X" || u === "ABSENT") return { status: "Absent", partialHours: 0 };
+  // P/2 = half day (4 h on an 8 h day), not “2 hours” — matches attendance sheets & pay
+  if (u === "P/2" || u === "HALF" || u === "HALFDAY" || u === "HALF DAY") {
+    return { status: "Partial", partialHours: WORKING_HOURS_PER_DAY / 2 };
+  }
+  const partialMatch = /^P\/(\d+(?:\.\d+)?)$/.exec(u);
+  if (partialMatch) {
+    const h = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, Number(partialMatch[1])));
+    return { status: "Partial", partialHours: h };
+  }
+  if (u === "PARTIAL") return { status: "Partial", partialHours: WORKING_HOURS_PER_DAY / 2 };
+  return null;
+}
+
+function setQuickUpdateEditMode(editing) {
+  quickUpdateEditMode = editing;
+  if (quickUpdateEditBtn) quickUpdateEditBtn.classList.toggle("hidden", editing);
+  if (quickUpdateSaveBtn) {
+    quickUpdateSaveBtn.classList.toggle("hidden", !editing);
+    quickUpdateSaveBtn.disabled = !editing;
+  }
+  if (quickUpdateCancelBtn) quickUpdateCancelBtn.classList.toggle("hidden", !editing);
+  const table = document.getElementById("quick-update-table");
+  if (table) table.classList.toggle("is-editing", editing);
+  renderQuickUpdateGrid();
+}
+
+function renderQuickUpdateGrid() {
+  if (!quickUpdateHead || !quickUpdateBody) return;
+  const range = resolveQuickUpdateRange();
+  const { startDate, endDate } = range;
+  const days = getDateRangeList(startDate, endDate);
+  const modeLabel = (quickViewMode?.value || "weekly") === "monthly" ? "Month" : "Week";
+  if (quickUpdateRangeLabel) {
+    quickUpdateRangeLabel.textContent = `${modeLabel}: ${formatDateLabel(startDate)} – ${formatDateLabel(endDate)} (${startDate} to ${endDate})`;
+  }
+  const staffList = getQuickUpdateStaffList();
+  const colCount = 4 + days.length + 4;
+  if (!staffList.length) {
+    quickUpdateHead.innerHTML = "";
+    quickUpdateBody.innerHTML = `<tr><td colspan="${colCount}" class="empty">No staff for this department and period.</td></tr>`;
+    const foot = document.getElementById("quick-update-foot");
+    if (foot) foot.innerHTML = "";
+    return;
+  }
+  quickUpdateHead.innerHTML = `
+    <tr>
+      <th>Staff</th>
+      <th>Dept</th>
+      <th class="quick-update-wage-col" title="Daily wage (per day)">Wage</th>
+      ${days.map((d) => `<th title="${d}">${formatDateLabel(d)}</th>`).join("")}
+      <th class="quick-update-ex-week-th" title="Extra hours for whole week (one entry)">Extra (week)</th>
+      <th class="quick-update-pay-col" title="Full days + partial days (P, P/2, P/4, etc.)">Weekly</th>
+      <th class="quick-update-pay-col" title="Pay for extra (week) hours">Extra pay</th>
+      <th class="quick-update-pay-col quick-update-total-col" title="Weekly attendance pay + extra pay">Total</th>
+    </tr>
+  `;
+  quickUpdateBody.innerHTML = staffList
+    .map((person) => {
+      const weeklyEx = getWeeklyExtraHours(person.id, startDate, endDate);
+      const rowClass = quickUpdateEditMode ? "quick-update-edit-row" : "";
+      const dayCells = days
+        .map((date) => {
+          const marker = attendanceMarkerForQuick(person.id, date);
+          if (quickUpdateEditMode) {
+            return `<td class="quick-update-cell"><input type="text" class="js-quick-cell" data-staff-id="${person.id}" data-date="${date}" value="${escapeHtml(marker === "X" && !state.attendance.some((a) => a.staffId === person.id && a.date === date) ? "" : marker)}" placeholder="P" autocomplete="off" spellcheck="false"></td>`;
+          }
+          const display = marker === "X" && !state.attendance.some((a) => a.staffId === person.id && a.date === date) ? "—" : marker;
+          return `<td class="quick-update-cell quick-update-cell-readonly">${escapeHtml(display)}</td>`;
+        })
+        .join("");
+      const exCell = quickUpdateEditMode
+        ? `<td class="quick-update-cell quick-update-ex-col"><input type="number" class="js-quick-weekly-extra" data-staff-id="${person.id}" min="0" max="999" step="0.5" value="${weeklyEx || ""}" placeholder="0"></td>`
+        : `<td class="quick-update-cell quick-update-ex-col">${weeklyEx ? escapeHtml(String(weeklyEx)) : "—"}</td>`;
+      const salaryCells = quickUpdateSalaryCellsHtml(person, startDate, endDate, null);
+      return `
+      <tr class="${rowClass}" data-quick-staff="${person.id}">
+        <td>${escapeHtml(person.name)}</td>
+        <td>${escapeHtml(normalizeDepartment(person))}</td>
+        ${quickUpdateWageCellHtml(person)}
+        ${dayCells}
+        ${exCell}
+        ${salaryCells}
+      </tr>`;
+    })
+    .join("");
+  updateQuickUpdateFooterTotals();
+}
+
+/** Rows for print: same data as the grid, excluding staff with zero total pay. */
+function buildQuickUpdatePrintPayload() {
+  const range = resolveQuickUpdateRange();
+  const { startDate, endDate } = range;
+  const days = getDateRangeList(startDate, endDate);
+  const staffList = getQuickUpdateStaffList();
+  const rows = [];
+  let sumAttendance = 0;
+  let sumExtra = 0;
+  let sumTotal = 0;
+  for (const person of staffList) {
+    const b = calculateSalaryBreakdown(person, startDate, endDate);
+    if (b.attOnly || b.totalPay <= 0) continue;
+    const weeklyEx = getWeeklyExtraHours(person.id, startDate, endDate);
+    const dayMarks = days.map((date) => {
+      const marker = attendanceMarkerForQuick(person.id, date);
+      const hasRec = state.attendance.some((a) => a.staffId === person.id && a.date === date);
+      if (marker === "X" && !hasRec) return "—";
+      return marker;
+    });
+    rows.push({
+      name: person.name,
+      dept: normalizeDepartment(person),
+      wage: Number(person.salaryPerDay) || 0,
+      dayMarks,
+      weeklyEx,
+      breakdown: b,
+    });
+    sumAttendance += b.attendancePay;
+    sumExtra += b.extraPay;
+    sumTotal += b.totalPay;
+  }
+  const deptFilter = getDepartmentFilter(filterDeptQuick);
+  const modeLabel = (quickViewMode?.value || "weekly") === "monthly" ? "Month" : "Week";
+  return {
+    startDate,
+    endDate,
+    days,
+    rows,
+    sumAttendance,
+    sumExtra,
+    sumTotal,
+    deptLabel: deptFilter || "All departments",
+    periodLabel: `${modeLabel}: ${formatDateLabel(startDate)} – ${formatDateLabel(endDate)} (${startDate} to ${endDate})`,
+  };
+}
+
+function printQuickUpdateSheet() {
+  if (quickUpdateEditMode) {
+    window.alert("Save or cancel your edits before printing.");
+    return;
+  }
+  const data = buildQuickUpdatePrintPayload();
+  if (!getQuickUpdateStaffList().length) {
+    window.alert("No staff loaded. Select filters and click Apply.");
+    return;
+  }
+  if (!data.rows.length) {
+    window.alert("No rows with wages to print for this period (zero-pay staff are omitted).");
+    return;
+  }
+  const dayTh = data.days.map((d) => `<th>${escapeHtml(formatDateLabel(d))}</th>`).join("");
+  const bodyRows = data.rows
+    .map((r) => {
+      const dayTd = r.dayMarks.map((m) => `<td class="c">${escapeHtml(m)}</td>`).join("");
+      return `<tr>
+        <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.dept)}</td>
+        <td class="n">${formatCurrency(r.wage)}</td>
+        ${dayTd}
+        <td class="c">${r.weeklyEx ? escapeHtml(String(r.weeklyEx)) : "—"}</td>
+        <td class="n">${formatCurrency(r.breakdown.attendancePay)}</td>
+        <td class="n">${formatCurrency(r.breakdown.extraPay)}</td>
+        <td class="n"><strong>${formatCurrency(r.breakdown.totalPay)}</strong></td>
+        <td class="sign-col"></td>
+      </tr>`;
+    })
+    .join("");
+  const printedAt = new Date().toLocaleString();
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Quick Update — ${escapeHtml(data.deptLabel)}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, Segoe UI, sans-serif; font-size: 11px; margin: 12px; color: #111; }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    .meta { margin: 0 0 12px; color: #444; font-size: 11px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #333; padding: 4px 5px; text-align: left; }
+    th { background: #eee; font-weight: 600; }
+    td.c, th.c { text-align: center; }
+    td.n, th.n { text-align: right; white-space: nowrap; }
+    .sign-col { min-width: 4.5em; width: 4.5em; }
+    tfoot td { font-weight: 700; background: #f5f5f5; }
+    @media print {
+      body { margin: 0; }
+      @page { size: landscape; margin: 10mm; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Quick Update — ${escapeHtml(data.deptLabel)}</h1>
+  <p class="meta">${escapeHtml(data.periodLabel)}<br>Printed ${escapeHtml(printedAt)} · Staff with ₹0 total pay omitted</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Staff</th>
+        <th>Dept</th>
+        <th class="n">Wage</th>
+        ${dayTh}
+        <th class="c">Extra (week)</th>
+        <th class="n">Weekly</th>
+        <th class="n">Extra pay</th>
+        <th class="n">Total</th>
+        <th class="sign-col">Sign</th>
+      </tr>
+    </thead>
+    <tbody>${bodyRows}</tbody>
+    <tfoot>
+      <tr>
+        <td colspan="${4 + data.days.length}"><strong>Total (printed staff)</strong></td>
+        <td class="n"><strong>${formatCurrency(data.sumAttendance)}</strong></td>
+        <td class="n"><strong>${formatCurrency(data.sumExtra)}</strong></td>
+        <td class="n"><strong>${formatCurrency(data.sumTotal)}</strong></td>
+        <td class="sign-col"></td>
+      </tr>
+    </tfoot>
+  </table>
+</body>
+</html>`;
+  printHtmlInHiddenFrame(html);
+}
+
+function exportQuickUpdateCsv() {
+  if (quickUpdateEditMode) {
+    window.alert("Save or cancel your edits before downloading CSV.");
+    return;
+  }
+  const data = buildQuickUpdatePrintPayload();
+  if (!getQuickUpdateStaffList().length) {
+    window.alert("No staff loaded. Select filters and click Apply.");
+    return;
+  }
+  if (!data.rows.length) {
+    window.alert("No rows with wages to export for this period (zero-pay staff are omitted).");
+    return;
+  }
+  const headRow = [
+    "Staff",
+    "Dept",
+    "Wage",
+    ...data.days.map((d) => formatDateLabel(d)),
+    "Extra (week)",
+    "Weekly",
+    "Extra pay",
+    "Total",
+  ];
+  const bodyRows = data.rows.map((r) => [
+    r.name,
+    r.dept,
+    String(r.wage),
+    ...r.dayMarks,
+    r.weeklyEx ? String(r.weeklyEx) : "",
+    String(Math.round(r.breakdown.attendancePay)),
+    String(Math.round(r.breakdown.extraPay)),
+    String(Math.round(r.breakdown.totalPay)),
+  ]);
+  const totalRow = Array(headRow.length).fill("");
+  totalRow[0] = "Total (printed staff)";
+  totalRow[headRow.length - 3] = String(Math.round(data.sumAttendance));
+  totalRow[headRow.length - 2] = String(Math.round(data.sumExtra));
+  totalRow[headRow.length - 1] = String(Math.round(data.sumTotal));
+  const lines = [
+    escapeCsvField(`Quick Update — ${data.deptLabel}`),
+    escapeCsvField(data.periodLabel),
+    "",
+    headRow.map(escapeCsvField).join(","),
+    ...bodyRows.map((row) => row.map(escapeCsvField).join(",")),
+    totalRow.map(escapeCsvField).join(","),
+  ];
+  const rangeLabel = `${formatDateLabel(data.startDate)} to ${formatDateLabel(data.endDate)}`.replace(
+    /[/\\:*?"<>|]/g,
+    "-",
+  );
+  const sheetPrefix = (quickViewMode?.value || "weekly") === "monthly" ? "Monthly" : "Weekly";
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${sheetPrefix} ${rangeLabel}.csv`;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** Print HTML without window.open (avoids pop-up blockers). */
+function printHtmlInHiddenFrame(html) {
+  let frame = document.getElementById("quick-update-print-frame");
+  if (!frame) {
+    frame = document.createElement("iframe");
+    frame.id = "quick-update-print-frame";
+    frame.setAttribute("title", "Print preview");
+    frame.style.cssText = "position:fixed;width:0;height:0;border:0;opacity:0;pointer-events:none";
+    document.body.appendChild(frame);
+  }
+  const win = frame.contentWindow;
+  const doc = win?.document;
+  if (!doc) {
+    window.alert("Could not open print view. Please try again.");
+    return;
+  }
+  let printed = false;
+  const runPrint = () => {
+    if (printed) return;
+    printed = true;
+    try {
+      win.focus();
+      win.print();
+    } catch (err) {
+      printed = false;
+      console.error(err);
+      window.alert("Print failed. Please try again.");
+    }
+  };
+  frame.onload = () => {
+    frame.onload = null;
+    setTimeout(runPrint, 50);
+  };
+  doc.open();
+  doc.write(html);
+  doc.close();
+  if (doc.readyState === "complete") setTimeout(runPrint, 50);
+}
+
+async function saveQuickUpdateGrid() {
+  if (!quickUpdateEditMode || !quickUpdateRange) return;
+  const { startDate, endDate } = quickUpdateRange;
+  const staffList = getQuickUpdateStaffList();
+  const tasks = [];
+  const errors = [];
+  for (const person of staffList) {
+    const days = getDateRangeList(startDate, endDate);
+    for (const date of days) {
+      const inp = quickUpdateBody.querySelector(`.js-quick-cell[data-staff-id="${person.id}"][data-date="${date}"]`);
+      const raw = inp?.value ?? "";
+      const parsed = parseQuickCellInput(raw);
+      if (parsed === null) {
+        errors.push(`${person.name} — ${formatDateLabel(date)}: "${raw}"`);
+        continue;
+      }
+      const record = buildAttendanceRecord(person.id, date, parsed.status, parsed.partialHours);
+      tasks.push(saveAttendanceRecord(record).then(() => upsertAttendanceInState(record)));
+    }
+    const exInp = quickUpdateBody.querySelector(`.js-quick-weekly-extra[data-staff-id="${person.id}"]`);
+    if (exInp) {
+      tasks.push(saveWeeklyExtraHours(person.id, startDate, endDate, exInp.value));
+    }
+    const wageInp = quickUpdateBody.querySelector(`.js-quick-wage[data-staff-id="${person.id}"]`);
+    if (wageInp && !isAttendanceOnlyDepartment(person)) {
+      const wage = Number(wageInp.value);
+      if (Number.isNaN(wage) || wage < 0) {
+        errors.push(`${person.name} — Wage: invalid amount`);
+      } else if (wage !== Number(person.salaryPerDay)) {
+        person.salaryPerDay = wage;
+        tasks.push(saveStaffRecord(person));
+      }
+    }
+  }
+  if (errors.length) {
+    window.alert(`Could not save — fix these cells (use P, A, X, or P/4):\n\n${errors.slice(0, 12).join("\n")}${errors.length > 12 ? `\n…and ${errors.length - 12} more` : ""}`);
+    return;
+  }
+  try {
+    await Promise.all(tasks);
+    setQuickUpdateEditMode(false);
+    renderAttendanceHistory();
+    renderSalaryOverview();
+    renderBulkAttendanceRows();
+    renderStaff();
+  } catch (err) {
+    console.error(err);
+    window.alert(`Could not save: ${err?.message || String(err)}`);
+  }
+}
+
 function getBulkRowAttendanceState(person, dateStr) {
   const ex = state.attendance.find((a) => a.staffId === person.id && a.date === dateStr);
   if (!ex) {
-    return { status: "Present", partialHours: 4, extraHours: 0 };
+    return { status: "Present", partialHours: 4 };
   }
-  const extraH = Math.max(0, Math.min(16, Number(ex.extraHours) || 0));
   const st = ex.status === "Absent" ? "Absent" : ex.status === "Partial" ? "Partial" : "Present";
-  let partialH = 4;
-  if (st === "Partial") {
-    partialH = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, Number(ex.hours || 0) - extraH));
-  }
-  return { status: st, partialHours: partialH, extraHours: extraH };
+  const partialH = st === "Partial" ? attendanceBaseHours(ex) : 4;
+  return { status: st, partialHours: partialH };
 }
 
 /** Every visible staff row has a saved attendance row for this date (same filter as Save). */
@@ -1485,7 +2119,7 @@ async function refreshBulkAttendanceData() {
 
 function bulkAttendanceRowHtml(person, dateStr) {
   const attOnly = isAttendanceOnlyDepartment(person);
-  const { status, partialHours, extraHours } = getBulkRowAttendanceState(person, dateStr);
+  const { status, partialHours } = getBulkRowAttendanceState(person, dateStr);
   const presentChk = status === "Present" ? " checked" : "";
   const absentChk = status === "Absent" ? " checked" : "";
   const partialChk = status === "Partial" ? " checked" : "";
@@ -1501,9 +2135,6 @@ function bulkAttendanceRowHtml(person, dateStr) {
       </td>
       <td>
         <input type="number" class="compact-input js-partial-hours" data-staff-id="${person.id}" min="0" max="24" step="0.5" value="${partialHours}"${partialDisabled}>
-      </td>
-      <td>
-        <input type="number" class="compact-input js-extra-hours" data-staff-id="${person.id}" min="0" max="16" step="0.5" value="${extraHours}">
       </td>`;
   const rowCore = `
     <tr data-staff-row="${person.id}">
@@ -1533,13 +2164,13 @@ function setBulkAttendanceTableHeader() {
   const row = bulkAttendanceForm?.querySelector("thead tr");
   if (!row) return;
   row.innerHTML = canToggleStaffActive()
-    ? "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Status</th><th>Hours (if Partial)</th><th>Extra Hours</th><th>Action</th>"
-    : "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Status</th><th>Hours (if Partial)</th><th>Extra Hours</th>";
+    ? "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Status</th><th>Hours (if Partial)</th><th>Action</th>"
+    : "<th>Staff</th><th>Dept</th><th>Salary / Day</th><th>Status</th><th>Hours (if Partial)</th>";
 }
 
 function renderBulkAttendanceRows() {
   setBulkAttendanceTableHeader();
-  const bulkCols = canToggleStaffActive() ? 7 : 6;
+  const bulkCols = canToggleStaffActive() ? 6 : 5;
   updateMarkAttendanceDeptGate();
   if (!isMarkAttendanceDepartmentSelected()) {
     bulkAttendanceBody.innerHTML = `<tr><td colspan="${bulkCols}" class="empty">Select a department above to load staff and mark attendance.</td></tr>`;
@@ -1627,14 +2258,10 @@ function loadAttendanceUpdateFormFromExisting() {
   if (!staffId || !date) return;
   const existing = state.attendance.find((entry) => entry.staffId === staffId && entry.date === date);
   const status = existing?.status || "Present";
-  const extraHours = Number(existing?.extraHours || 0);
-  const partialHours = status === "Partial"
-    ? Math.max(0, Math.min(WORKING_HOURS_PER_DAY, Number(existing?.hours || 0) - extraHours))
-    : 4;
+  const partialHours = status === "Partial" ? attendanceBaseHours(existing) : 4;
   attendanceUpdateStatus.value = status;
   attendanceUpdatePartialHours.disabled = status !== "Partial";
   attendanceUpdatePartialHours.value = partialHours;
-  attendanceUpdateExtraHours.value = extraHours;
 }
 
 function renderAdvanceBalance() {
@@ -1717,10 +2344,7 @@ function renderWeeklyPaidSummary() {
     const dayCells = dateList.map((date) => {
       const entry = state.attendance.find((a) => a.staffId === person.id && a.date === date);
       const status = entry?.status || "Absent";
-      const extraHours = Number(entry?.extraHours || 0);
-      const partialHours = status === "Partial"
-        ? Math.max(0, Math.min(WORKING_HOURS_PER_DAY, Number(entry?.hours || 0) - extraHours))
-        : 4;
+      const partialHours = status === "Partial" ? attendanceBaseHours(entry) : 4;
       return `
         <td data-date="${date}">
           <select class="js-weekly-cell-status compact-input">
@@ -1729,7 +2353,6 @@ function renderWeeklyPaidSummary() {
             <option value="Absent" ${status === "Absent" ? "selected" : ""}>X</option>
           </select>
           <input type="number" class="compact-input js-weekly-cell-partial" min="0" max="8" step="0.5" value="${partialHours}" ${status === "Partial" ? "" : "disabled"} title="Partial hours">
-          <input type="number" class="compact-input js-weekly-cell-extra" min="0" max="16" step="0.5" value="${extraHours}" title="Extra hours">
         </td>
       `;
     }).join("");
@@ -1769,8 +2392,7 @@ function renderWeeklyEditTable(staffId) {
   weeklyPaidEditorBody.innerHTML = days.map((date) => {
     const existing = state.attendance.find((a) => a.staffId === staffId && a.date === date);
     const status = existing?.status || "Absent";
-    const partialHours = status === "Partial" ? Math.min(WORKING_HOURS_PER_DAY, Number(existing?.hours || 0) - Number(existing?.extraHours || 0)) : 4;
-    const extraHours = Number(existing?.extraHours || 0);
+    const partialHours = status === "Partial" ? attendanceBaseHours(existing) : 4;
     return `
       <tr data-edit-date="${date}">
         <td>${date}</td>
@@ -1782,7 +2404,6 @@ function renderWeeklyEditTable(staffId) {
           </select>
         </td>
         <td><input type="number" class="compact-input js-edit-partial" min="0" max="8" step="0.5" value="${partialHours}" ${status === "Partial" ? "" : "disabled"}></td>
-        <td><input type="number" class="compact-input js-edit-extra" min="0" max="16" step="0.5" value="${extraHours}"></td>
       </tr>
     `;
   }).join("");
@@ -1803,14 +2424,17 @@ function setPage(pageName) {
     setAuthUI();
     return;
   }
-  if (isManagerUser() && !["home", "add-staff", "mark-attendance", "weekly-salary", "attendance-records", "info"].includes(pageName)) {
+  if (isManagerUser() && !["home", "add-staff", "mark-attendance", "weekly-salary", "attendance-records", "quick-update", "info"].includes(pageName)) {
     pageName = "home";
+  }
+  if (pageName !== "quick-update" && quickUpdateEditMode) {
+    setQuickUpdateEditMode(false);
   }
   if (pageName !== "weekly-salary") {
     closeSalaryPageAttendanceEditor();
     closeSalaryTableFullscreen();
   }
-  const pages = [homePage, addStaffPage, weeklySalaryPage, weeklyPaidPage, staffSalaryPage, advancePage, attendanceRecordsPage, attendancePage, infoPage];
+  const pages = [homePage, addStaffPage, weeklySalaryPage, weeklyPaidPage, staffSalaryPage, advancePage, attendanceRecordsPage, quickUpdatePage, attendancePage, infoPage];
   if (isAdminUser()) pages.push(userManagementPage);
   pages.forEach((p) => p.classList.add("hidden"));
   if (pageName === "home") homePage.classList.remove("hidden");
@@ -1820,6 +2444,10 @@ function setPage(pageName) {
   if (pageName === "staff-salary") staffSalaryPage.classList.remove("hidden");
   if (pageName === "advance") advancePage.classList.remove("hidden");
   if (pageName === "attendance-records") attendanceRecordsPage.classList.remove("hidden");
+  if (pageName === "quick-update") {
+    quickUpdatePage.classList.remove("hidden");
+    renderQuickUpdateGrid();
+  }
   if (pageName === "mark-attendance") {
     attendancePage.classList.remove("hidden");
     bulkMarkFormDirty = false;
@@ -1967,6 +2595,7 @@ function setAuthUI() {
       staffSalaryPage,
       advancePage,
       attendanceRecordsPage,
+      quickUpdatePage,
       attendancePage,
       infoPage,
       userManagementPage,
@@ -2148,17 +2777,11 @@ bulkAttendanceForm.addEventListener("submit", async (event) => {
     const selected = bulkAttendanceBody.querySelector(`input[name="status-${person.id}"]:checked`);
     const status = selected ? selected.value : "Present";
     const hoursInput = bulkAttendanceBody.querySelector(`.js-partial-hours[data-staff-id="${person.id}"]`);
-    const extraInput = bulkAttendanceBody.querySelector(`.js-extra-hours[data-staff-id="${person.id}"]`);
     let partialHours = Number(hoursInput?.value || 0);
-    let extraHours = Number(extraInput?.value || 0);
     if (status === "Partial") {
-      // Part-time is bounded to one workday shift for salary/day calculation.
       partialHours = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, partialHours));
     }
-    extraHours = Math.max(0, Math.min(16, extraHours));
-    const baseHours = status === "Present" ? WORKING_HOURS_PER_DAY : status === "Absent" ? 0 : partialHours;
-    const hours = baseHours + extraHours;
-    const record = { id: `${person.id}_${date}`, staffId: person.id, date, status, hours, extraHours };
+    const record = buildAttendanceRecord(person.id, date, status, partialHours);
     tasks.push(saveAttendanceRecord(record));
     upsertAttendanceInState(record);
   }
@@ -2187,6 +2810,19 @@ if (salaryResult) {
     if (!btn?.dataset?.staffId) return;
     openSalaryPageAttendanceEditor(btn.dataset.staffId);
   });
+  salaryResult.addEventListener("change", async (e) => {
+    const inp = e.target.closest(".js-weekly-extra-hours");
+    if (!inp?.dataset?.staffId || !isWeeklySalaryDepartmentSelected()) return;
+    const { startDate, endDate } = resolveSalaryRange();
+    if (!startDate || !endDate || startDate > endDate) return;
+    try {
+      await saveWeeklyExtraHours(inp.dataset.staffId, startDate, endDate, inp.value);
+      renderSalaryOverview();
+    } catch (err) {
+      console.error(err);
+      window.alert(`Could not save weekly extra hours: ${err?.message || String(err)}`);
+    }
+  });
 }
 
 if (salaryAttendanceEditorForm && salaryAttendanceEditorBody) {
@@ -2208,18 +2844,8 @@ if (salaryAttendanceEditorForm && salaryAttendanceEditorBody) {
       if (!date) return;
       const status = row.querySelector(".js-salary-page-status")?.value || "Absent";
       let partial = Number(row.querySelector(".js-salary-page-partial")?.value || 0);
-      let extra = Number(row.querySelector(".js-salary-page-extra")?.value || 0);
       partial = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, partial));
-      extra = Math.max(0, Math.min(16, extra));
-      const base = status === "Present" ? WORKING_HOURS_PER_DAY : status === "Absent" ? 0 : partial;
-      const record = {
-        id: `${staffId}_${date}`,
-        staffId,
-        date,
-        status,
-        hours: base + extra,
-        extraHours: extra,
-      };
+      const record = buildAttendanceRecord(staffId, date, status, partial);
       tasks.push(saveAttendanceRecord(record));
       upsertAttendanceInState(record);
     });
@@ -2301,6 +2927,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 goMarkAttendanceBtn.addEventListener("click", () => setPage("mark-attendance"));
+if (goQuickUpdateBtn) goQuickUpdateBtn.addEventListener("click", () => setPage("quick-update"));
 goDashboardBtn.addEventListener("click", () => setPage("home"));
 if (openInfoPageBtn) openInfoPageBtn.addEventListener("click", () => setPage("info"));
 if (openInfoFromHomeBtn) openInfoFromHomeBtn.addEventListener("click", () => setPage("info"));
@@ -2312,6 +2939,40 @@ openStaffSalaryPageBtn.addEventListener("click", () => setPage("staff-salary"));
 openAdvancePageBtn.addEventListener("click", () => setPage("advance"));
 openUserManagementPageBtn.addEventListener("click", () => setPage("user-management"));
 openAttendanceRecordsPageBtn.addEventListener("click", () => setPage("attendance-records"));
+if (openQuickUpdatePageBtn) openQuickUpdatePageBtn.addEventListener("click", () => setPage("quick-update"));
+
+if (quickUpdateFilterForm) {
+  quickUpdateFilterForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (quickUpdateEditMode) setQuickUpdateEditMode(false);
+    renderQuickUpdateGrid();
+  });
+}
+if (quickUpdateEditBtn) {
+  quickUpdateEditBtn.addEventListener("click", () => {
+    resolveQuickUpdateRange();
+    setQuickUpdateEditMode(true);
+  });
+}
+if (quickUpdateCancelBtn) {
+  quickUpdateCancelBtn.addEventListener("click", () => setQuickUpdateEditMode(false));
+}
+if (quickUpdateSaveBtn) {
+  quickUpdateSaveBtn.addEventListener("click", () => saveQuickUpdateGrid());
+}
+if (quickUpdatePrintBtn) {
+  quickUpdatePrintBtn.addEventListener("click", () => printQuickUpdateSheet());
+}
+if (quickUpdateCsvBtn) {
+  quickUpdateCsvBtn.addEventListener("click", () => exportQuickUpdateCsv());
+}
+if (quickUpdateBody) {
+  quickUpdateBody.addEventListener("input", (event) => {
+    if (!quickUpdateEditMode) return;
+    const row = event.target.closest("tr[data-quick-staff]");
+    if (row) updateQuickUpdateRowSalaryCells(row);
+  });
+}
 attendanceFilterForm.addEventListener("submit", (event) => {
   event.preventDefault();
   renderAttendanceHistory();
@@ -2340,19 +3001,9 @@ attendanceUpdateForm.addEventListener("submit", async (event) => {
   const date = attendanceUpdateDate.value;
   if (!staffId || !date) return;
   let partial = Number(attendanceUpdatePartialHours.value || 0);
-  let extra = Number(attendanceUpdateExtraHours.value || 0);
   partial = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, partial));
-  extra = Math.max(0, Math.min(16, extra));
   const status = attendanceUpdateStatus.value;
-  const base = status === "Present" ? WORKING_HOURS_PER_DAY : status === "Absent" ? 0 : partial;
-  const record = {
-    id: `${staffId}_${date}`,
-    staffId,
-    date,
-    status,
-    hours: base + extra,
-    extraHours: extra,
-  };
+  const record = buildAttendanceRecord(staffId, date, status, partial);
   await saveAttendanceRecord(record);
   upsertAttendanceInState(record);
   attendanceRefDate.value = date;
@@ -2377,18 +3028,8 @@ weeklyPaidBody.addEventListener("click", (event) => {
     const date = cell.dataset.date;
     const status = cell.querySelector(".js-weekly-cell-status").value;
     let partial = Number(cell.querySelector(".js-weekly-cell-partial").value || 0);
-    let extra = Number(cell.querySelector(".js-weekly-cell-extra").value || 0);
     partial = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, partial));
-    extra = Math.max(0, Math.min(16, extra));
-    const base = status === "Present" ? WORKING_HOURS_PER_DAY : status === "Absent" ? 0 : partial;
-    const record = {
-      id: `${staffId}_${date}`,
-      staffId,
-      date,
-      status,
-      hours: base + extra,
-      extraHours: extra,
-    };
+    const record = buildAttendanceRecord(staffId, date, status, partial);
     tasks.push(saveAttendanceRecord(record));
     upsertAttendanceInState(record);
   });
@@ -2420,18 +3061,8 @@ weeklyPaidEditorForm.addEventListener("submit", async (event) => {
     const date = row.dataset.editDate;
     const status = row.querySelector(".js-edit-status").value;
     let partial = Number(row.querySelector(".js-edit-partial").value || 0);
-    let extra = Number(row.querySelector(".js-edit-extra").value || 0);
     partial = Math.max(0, Math.min(WORKING_HOURS_PER_DAY, partial));
-    extra = Math.max(0, Math.min(16, extra));
-    const base = status === "Present" ? WORKING_HOURS_PER_DAY : status === "Absent" ? 0 : partial;
-    const record = {
-      id: `${currentWeeklyEditStaffId}_${date}`,
-      staffId: currentWeeklyEditStaffId,
-      date,
-      status,
-      hours: base + extra,
-      extraHours: extra,
-    };
+    const record = buildAttendanceRecord(currentWeeklyEditStaffId, date, status, partial);
     tasks.push(saveAttendanceRecord(record));
     upsertAttendanceInState(record);
   });
@@ -2654,6 +3285,7 @@ async function init() {
     state.attendance = Array.isArray(cloudData?.attendance) ? cloudData.attendance : [];
     state.advances = Array.isArray(cloudData?.advances) ? cloudData.advances : [];
     state.users = Array.isArray(cloudData?.users) ? cloudData.users : [];
+    state.weeklyExtraHours = Array.isArray(cloudData?.weeklyExtraHours) ? cloudData.weeklyExtraHours : [];
     cloudCustomDepartments = Array.isArray(cloudData?.customDepartments) ? cloudData.customDepartments : [];
   } else {
     dbRef = await openDatabase();
@@ -2686,6 +3318,7 @@ async function init() {
   }
   bulkAttendanceDate.value = todayString();
   attendanceRefDate.value = todayString();
+  if (quickRefDate) quickRefDate.value = todayString();
   attendanceViewMode.value = "weekly";
   const [weekStart, weekEnd] = getDateRangeFromLatest(getLatestAttendanceDate(), "weekly");
   salaryStartDateInput.value = weekStart;

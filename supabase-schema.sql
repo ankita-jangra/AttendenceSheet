@@ -36,6 +36,16 @@ create table if not exists public.advances (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.weekly_extra_hours (
+  id text primary key,
+  staff_id uuid not null references public.staff(id) on delete cascade,
+  start_date date not null,
+  end_date date not null,
+  hours numeric(6,2) not null default 0,
+  created_at timestamptz not null default now(),
+  unique (staff_id, start_date, end_date)
+);
+
 create table if not exists public.app_users (
   id text primary key,
   username text not null unique,
@@ -85,6 +95,8 @@ create index if not exists idx_advances_date on public.advances(date);
 alter table public.staff enable row level security;
 alter table public.attendance enable row level security;
 alter table public.advances enable row level security;
+alter table public.weekly_extra_hours enable row level security;
+
 alter table public.app_users enable row level security;
 
 -- Demo policy: public access with anon key (simple static app setup).
@@ -97,6 +109,9 @@ create policy "public attendance access" on public.attendance for all using (tru
 
 drop policy if exists "public advances access" on public.advances;
 create policy "public advances access" on public.advances for all using (true) with check (true);
+
+drop policy if exists "public weekly extra hours access" on public.weekly_extra_hours;
+create policy "public weekly extra hours access" on public.weekly_extra_hours for all using (true) with check (true);
 
 drop policy if exists "public app users access" on public.app_users;
 create policy "public app users access" on public.app_users for all using (true) with check (true);

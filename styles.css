@@ -646,6 +646,134 @@ body.salary-fullscreen-active {
   gap: 8px;
 }
 
+.quick-update-wrap {
+  max-height: min(72vh, 900px);
+  overflow: auto;
+}
+
+.quick-update-table {
+  font-size: 0.88rem;
+}
+
+.quick-update-table th,
+.quick-update-table td {
+  text-align: center;
+  vertical-align: middle;
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+.quick-update-table th:first-child,
+.quick-update-table td:first-child,
+.quick-update-table th:nth-child(2),
+.quick-update-table td:nth-child(2) {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--card);
+}
+
+.quick-update-table th:nth-child(2),
+.quick-update-table td:nth-child(2) {
+  left: 120px;
+}
+
+.quick-update-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--table-head-bg, var(--card));
+}
+
+.quick-update-table thead th:first-child,
+.quick-update-table thead th:nth-child(2) {
+  z-index: 3;
+}
+
+.quick-update-cell {
+  width: 3.25rem;
+  min-width: 3.25rem;
+  max-width: 3.25rem;
+  padding: 4px 2px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.quick-update-cell input {
+  width: 100%;
+  min-width: 2.75rem;
+  max-width: 3.5rem;
+  padding: 4px 2px;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.quick-update-ex-col input,
+.quick-update-day-ex-col input {
+  width: 3.25rem;
+  min-width: 3rem;
+  max-width: 4rem;
+  text-align: center;
+}
+
+.quick-update-day-ex-th,
+.quick-update-ex-week-th {
+  font-size: 0.75rem;
+  min-width: 2.5rem;
+}
+
+.quick-update-day-ex-col {
+  background: var(--card);
+}
+
+.quick-update-table tr.quick-update-edit-row .quick-update-cell {
+  background: var(--quick-edit-bg, rgba(59, 130, 246, 0.08));
+}
+
+.quick-update-table.is-editing .quick-update-cell-readonly {
+  color: var(--muted);
+}
+
+.quick-update-wage-col {
+  text-align: right !important;
+  min-width: 5.25rem;
+  font-variant-numeric: tabular-nums;
+  background: var(--card);
+}
+
+.quick-update-wage-col input {
+  width: 5rem;
+  min-width: 4.5rem;
+  text-align: right;
+}
+
+.quick-update-pay-col {
+  text-align: right !important;
+  min-width: 5.5rem;
+  font-variant-numeric: tabular-nums;
+  background: var(--card);
+}
+
+.quick-update-total-col {
+  font-weight: 700;
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  box-shadow: -4px 0 8px rgba(0, 0, 0, 0.06);
+}
+
+.quick-update-table thead th.quick-update-total-col {
+  z-index: 4;
+}
+
+.quick-update-foot-row td {
+  background: var(--dept-heading-bg, var(--card));
+  border-top: 2px solid var(--dept-heading-border, rgba(128, 128, 128, 0.25));
+}
+
 .update-msg {
   margin-left: 8px;
   color: var(--update-msg);
